@@ -17,15 +17,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows x64
+          - name: Windows x64 (NSIS)
             os: windows-latest
             target: x86_64-pc-windows-msvc
+            bundles: nsis
           - name: macOS Apple Silicon
             os: macos-14
             target: aarch64-apple-darwin
+            bundles: dmg
           - name: macOS Intel
             os: macos-15-intel
             target: x86_64-apple-darwin
+            bundles: dmg
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -45,7 +48,7 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
       - name: Build application
-        run: pnpm tauri build --target ${{ matrix.target }}
+        run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
