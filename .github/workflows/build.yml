@@ -47,8 +47,23 @@ jobs:
           targets: ${{ matrix.target }}
       - name: Install frontend dependencies
         run: pnpm install --no-frozen-lockfile
-      - name: Build application
-        run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: Generate platform icons
+        run: pnpm tauri icon src-tauri/icons/logo.svg
+      - name: Build macOS application bundle
+        if: runner.os == 'macOS'
+        run: pnpm tauri build --target ${{ matrix.target }} --bundles app
+      - name: Create macOS DMG
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="src-tauri/target/${{ matrix.target }}/release/bundle/macos/Weibo Manager.app"
+          DMG_DIR="src-tauri/target/${{ matrix.target }}/release/bundle/dmg"
+          mkdir -p "$DMG_DIR"
+          hdiutil create -volname "Weibo Manager" -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_DIR/Weibo Manager_0.1.0_${{ matrix.target == 'x86_64-apple-darwin' && 'x64' || 'aarch64' }}.dmg"
+      - name: Build Windows NSIS installer
+        if: runner.os == 'Windows'
+        run: pnpm tauri build --target ${{ matrix.target }} --bundles nsis
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
