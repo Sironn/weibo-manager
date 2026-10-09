@@ -41,9 +41,13 @@ struct ActiveSession {
 pub struct SessionStore(Mutex<Option<ActiveSession>>);
 
 #[tauri::command]
-pub fn start_qr_login(app: AppHandle) -> Result<(), String> {
+pub async fn start_qr_login(app: AppHandle) -> Result<(), String> {
+    // 窗口创建和 WebView 初始化可能触发平台级同步操作。
+    // 将命令声明为 async，避免在前端 invoke 的同步调用路径中阻塞主界面事件处理。
     if let Some(window) = app.get_webview_window("weibo-login") {
-        window.set_focus().map_err(|error| format!("无法切换到微博登录窗口：{error}"))?;
+        window
+            .set_focus()
+            .map_err(|error| format!("无法切换到微博登录窗口：{error}"))?;
         return Ok(());
     }
 
