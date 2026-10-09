@@ -19,6 +19,10 @@ fn save_window_size(app: &tauri::AppHandle, width: f64, height: f64) {
 pub fn run() {
     let app = tauri::Builder::default()
         .setup(|app| {
+            let tray = tauri::tray::TrayIconBuilder::new()
+                .icon(app.default_window_icon().cloned().expect("default window icon missing"))
+                .build(app)?;
+            app.manage(tray);
             let handle = app.handle().clone();
             if let Some(path) = app_data_file(&handle, "window-size.json") {
                 if let Ok(raw) = fs::read_to_string(path) {
