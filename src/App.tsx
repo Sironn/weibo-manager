@@ -6,8 +6,8 @@ import {
   ShieldCheck, Sun, Trash2, Users, Video, X,
 } from "lucide-react";
 import {
-  buildFilename, defaultFilenameSettings, tokenLabels,
-  type FilenameSettings, type FilenameToken,
+  buildFilename, buildFolderName, defaultFilenameSettings, filenameVariables,
+  type FilenameSettings, type TemplateVariable,
 } from "./lib/filenameTemplate";
 
 type Page = "dashboard" | "accounts" | "delete" | "download" | "tasks" | "settings";
@@ -32,11 +32,33 @@ const demoPosts = [
   { date: "2023-12-21", type: "原创", text: "年末整理：一些旅行途中拍下的风景。", media: "视频", checked: false },
   { date: "2023-07-09", type: "原创", text: "今天的天空有很漂亮的云。", media: "无媒体", checked: false },
 ];
+// 文件命名设置初始化：兼容旧版参数配置，并为缺失字段提供安全默认值。
 const initialFilenameSettings: FilenameSettings = (() => {
   try {
     const raw = localStorage.getItem("wm-filename-settings");
-    return raw ? { ...defaultFilenameSettings, ...JSON.parse(raw) } : defaultFilenameSettings;
-  } catch { return defaultFilenameSettings; }
+    if (!raw) return defaultFilenameSettings;
+    const parsed = JSON.parse(raw) as Partial<FilenameSettings> & { tokens?: string[]; separator?: string; extension?: string };
+    if (typeof parsed.fileTemplate === "string" || typeof parsed.folderTemplate === "string") {
+      return {
+        ...defaultFilenameSettings,
+        fileTemplate: parsed.fileTemplate ?? defaultFilenameSettings.fileTemplate,
+        folderTemplate: parsed.folderTemplate ?? defaultFilenameSettings.folderTemplate,
+      };
+    }
+    // 旧版按勾选参数生成的设置迁移为可编辑模板。
+    const legacyNames: Record<string, string> = {
+      date: "%POST_TIME%", weiboId: "%POST_ID%", index: "%MEDIA_INDEX%",
+    };
+    const legacyParts = (parsed.tokens ?? []).map((token) => legacyNames[token]).filter(Boolean);
+    return {
+      fileTemplate: legacyParts.length
+        ? `${legacyParts.join(parsed.separator || "_")}.${(parsed.extension || "jpg").replace(/^\./, "")}`
+        : defaultFilenameSettings.fileTemplate,
+      folderTemplate: defaultFilenameSettings.folderTemplate,
+    };
+  } catch {
+    return defaultFilenameSettings;
+  }
 })();
 function App() {
   const [page, setPage] = useState<Page>("dashboard");
@@ -51,19 +73,22 @@ function App() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [users, setUsers] = useState(["travel_diary", "photo_notes"]);
   const [newUser, setNewUser] = useState("");
+  // 文件名与文件夹名模板分别保存；当前阶段只演示模板配置，不执行真实下载。
   const [filenameSettings, setFilenameSettings] = useState<FilenameSettings>(initialFilenameSettings);
+  // 左侧设置子菜单与变量插入目标由状态统一驱动。
+  const [settingSection, setSettingSection] = useState<"general" | "filename" | "security">("general");
+  const [templateTarget, setTemplateTarget] = useState<"file" | "folder">("file");
   const [downloadPath, setDownloadPath] = useState("~/Downloads/WeiboDownloads");
   const [concurrency, setConcurrency] = useState("3");
   const [requestDelay, setRequestDelay] = useState("1200");
   const [theme, setTheme] = useState("system");
   const filteredPosts = useMemo(() => demoPosts.map((post, i) => ({ ...post, checked: postChecks[i] }))
     .filter(post => post.text.toLowerCase().includes(keyword.toLowerCase()) && post.date >= dateFrom && post.date <= dateTo), [keyword, dateFrom, dateTo, postChecks]);
-  const tokenOrder = [...filenameSettings.tokens, ...(Object.keys(tokenLabels) as FilenameToken[]).filter(token => !filenameSettings.tokens.includes(token))];
+  // 预览值模拟真实下载时可从用户资料、微博元数据和媒体响应中读取的字段。
+  const previewValues = { USER_SCREEN_NAME: "travel_diary", POST_TIME: "2024-08-18_14-30-00", POST_ID: "5078219042", MEDIA_INDEX: "01", EXT: ".jpg" };
+  const previewFilename = buildFilename(filenameSettings.fileTemplate, previewValues);
+  const previewFoldername = buildFolderName(filenameSettings.folderTemplate, previewValues);
   const selectedCount = filteredPosts.filter(post => post.checked).length;
-  const previewFilename = buildFilename(filenameSettings, {
-    date: "2024-08-18", text: "周末散步，记录沿途光影", weiboId: "5078219042",
-    index: "01", mediaType: "image",
-  });
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
   const saveFilenameSettings = (next: FilenameSettings) => {
     setFilenameSettings(next);
@@ -104,15 +129,50 @@ function App() {
       <div className="stats-grid three"><Stat label="待处理用户" value={String(users.length)} icon={Users}/><Stat label="发现媒体" value="—" icon={Image} helper="等待真实采集模块"/><Stat label="下载完成" value="—" icon={Check} helper="当前为模拟数据"/></div>
     </section>;
     if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" subtitle="集中查看下载与删除任务、执行进度和结果。" actions={<button className="button secondary" onClick={() => notify("当前展示的是本地模拟任务。")}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel"><div className="panel-title"><div><strong>所有任务</strong><span>模拟任务状态可用于验收界面交互</span></div><button className="button ghost" onClick={() => setTasks([])}>清空模拟列表</button></div><div className="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>操作</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><strong>{task.title}</strong><small>任务 #{task.id}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.detail}</td><td><button className="icon-button" aria-label="查看任务详情" onClick={() => notify(`${task.title}：${task.detail}`)}><MoreHorizontal size={17}/></button></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建下载或删除模拟任务后会显示在这里。" />}</div></div></section>;
-    if (page === "settings") return <section className="page-stack"><PageHeading title="设置" subtitle="管理外观、任务行为与文件命名规则。设置在本机保存。" /><div className="settings-layout"><div className="panel settings-nav"><strong>偏好设置</strong><div className="settings-nav-item active"><Settings2 size={16}/> 常规设置</div><div className="settings-nav-item"><FileImage size={16}/> 文件命名</div><div className="settings-nav-item"><ShieldCheck size={16}/> 安全与数据</div></div><div className="settings-main">
-      <div className="panel"><div className="panel-title"><div><strong>外观</strong><span>个性化应用显示</span></div></div><Field label="主题"><select value={theme} onChange={e => { setTheme(e.target.value); setDark(e.target.value === "dark"); }}><option value="system">跟随系统（当前预览为浅色）</option><option value="light">浅色</option><option value="dark">深色</option></select></Field><div className="setting-row"><div><strong>任务并发数</strong><span>同时处理的任务数量</span></div><select value={concurrency} onChange={e => setConcurrency(e.target.value)}><option value="1">1 个</option><option value="2">2 个</option><option value="3">3 个</option><option value="5">5 个</option></select></div><div className="setting-row"><div><strong>请求间隔</strong><span>模拟请求间的等待时间</span></div><select value={requestDelay} onChange={e => setRequestDelay(e.target.value)}><option value="800">800 毫秒</option><option value="1200">1200 毫秒</option><option value="2000">2000 毫秒</option><option value="3000">3000 毫秒</option></select></div></div>
-      <div className="panel"><div className="panel-title"><div><strong>文件命名参数模块</strong><span>通过参数组合生成文件名，不将规则写死在下载页面</span></div><span className="tag blue">模块化</span></div><div className="token-list">{tokenOrder.map((token, position) => <div className="token-option" key={token}><input type="checkbox" checked={filenameSettings.tokens.includes(token)} onChange={e => { const tokens = e.target.checked ? [...filenameSettings.tokens, token] : filenameSettings.tokens.filter(t => t !== token); saveFilenameSettings({...filenameSettings, tokens}); }}/><span>{tokenLabels[token]}</span><code>{token}</code>{filenameSettings.tokens.includes(token) && <span className="token-move"><button type="button" disabled={filenameSettings.tokens.indexOf(token) === 0} aria-label="上移参数" onClick={() => { const tokens = [...filenameSettings.tokens]; const index = tokens.indexOf(token); if (index > 0) { [tokens[index - 1], tokens[index]] = [tokens[index], tokens[index - 1]]; saveFilenameSettings({...filenameSettings, tokens}); } }}>↑</button><button type="button" disabled={filenameSettings.tokens.indexOf(token) === filenameSettings.tokens.length - 1} aria-label="下移参数" onClick={() => { const tokens = [...filenameSettings.tokens]; const index = tokens.indexOf(token); if (index >= 0 && index < tokens.length - 1) { [tokens[index + 1], tokens[index]] = [tokens[index], tokens[index + 1]]; saveFilenameSettings({...filenameSettings, tokens}); } }}>↓</button></span>}<span className="token-check">{filenameSettings.tokens.includes(token) && <Check size={15}/>}</span></div>)}</div><div className="form-grid"><Field label="参数分隔符"><input maxLength={4} value={filenameSettings.separator} onChange={e => saveFilenameSettings({...filenameSettings, separator: e.target.value})}/></Field><Field label="文件扩展名（不含点）"><input value={filenameSettings.extension} onChange={e => saveFilenameSettings({...filenameSettings, extension: e.target.value.replace(/^\./, "")})}/></Field></div><div className="filename-preview"><span>文件名预览</span><div><FileImage size={18}/><code>{previewFilename}</code><button className="icon-button" aria-label="复制预览" onClick={() => { void navigator.clipboard?.writeText(previewFilename); notify("文件名预览已复制（如果系统允许剪贴板访问）。"); }}><ArrowRight size={16}/></button></div></div><div className="inline-note"><CircleHelp size={16}/> 非法字符会被替换，空参数自动跳过；实际下载时还会防止文件覆盖。</div></div>
-      <div className="panel"><div className="panel-title"><div><strong>下载目录</strong><span>当前默认目录</span></div></div><div className="input-with-button"><input value={downloadPath} onChange={e => setDownloadPath(e.target.value)}/><button className="button secondary" onClick={() => notify("目录选择器将在桌面运行环境接入。")}><FolderOpen size={15}/> 选择目录</button></div><p className="muted small">窗口尺寸会在调整时自动保存；下次启动恢复尺寸，窗口位置每次默认居中。</p></div>
-      </div></div></section>;
+    // 设置页面由右侧分区承载；左侧菜单负责切换并定位到对应分区。
+    if (page === "settings") return <section className="page-stack settings-page">
+      <PageHeading title="设置" subtitle="管理应用常规行为、下载命名规则与本地数据选项。" />
+      <div className="settings-main">
+        <section className="panel settings-section" id="settings-general">
+          <div className="panel-title"><div><strong>常规设置</strong><span>个性化应用显示与任务行为</span></div></div>
+          <Field label="主题"><select value={theme} onChange={e => { setTheme(e.target.value); setDark(e.target.value === "dark"); }}><option value="system">跟随系统（当前预览为浅色）</option><option value="light">浅色</option><option value="dark">深色</option></select></Field>
+          <div className="setting-row"><div><strong>任务并发数</strong><span>同时处理的任务数量</span></div><select value={concurrency} onChange={e => setConcurrency(e.target.value)}><option value="1">1 个</option><option value="2">2 个</option><option value="3">3 个</option><option value="5">5 个</option></select></div>
+          <div className="setting-row"><div><strong>请求间隔</strong><span>模拟请求间的等待时间</span></div><select value={requestDelay} onChange={e => setRequestDelay(e.target.value)}><option value="800">800 毫秒</option><option value="1200">1200 毫秒</option><option value="2000">2000 毫秒</option><option value="3000">3000 毫秒</option></select></div>
+        </section>
+        <section className="panel settings-section" id="settings-filename">
+          <div className="panel-title"><div><strong>文件与文件夹命名</strong><span>直接编辑占位符模板；点击变量可插入到当前选中的模板输入框</span></div><span className="tag blue">模板化</span></div>
+          <div className="template-field">
+            <Field label="下载文件名模板">
+              <input value={filenameSettings.fileTemplate} onFocus={() => setTemplateTarget("file")} onChange={e => saveFilenameSettings({...filenameSettings, fileTemplate: e.target.value})} placeholder="%USER_SCREEN_NAME% [%POST_TIME%] %POST_ID%_%MEDIA_INDEX%%EXT%" />
+            </Field>
+            <p className="template-help">示例：%USER_SCREEN_NAME% [%POST_TIME%] %POST_ID%_%MEDIA_INDEX%%EXT%</p>
+            <Field label="下载文件夹命名模板">
+              <input value={filenameSettings.folderTemplate} onFocus={() => setTemplateTarget("folder")} onChange={e => saveFilenameSettings({...filenameSettings, folderTemplate: e.target.value})} placeholder="%USER_SCREEN_NAME%" />
+            </Field>
+          </div>
+          <div className="variable-picker">
+            <div className="variable-picker-heading"><strong>可用变量</strong><span>当前插入目标：{templateTarget === "file" ? "文件名模板" : "文件夹模板"}</span></div>
+            <div className="variable-grid">{filenameVariables.map((variable: TemplateVariable) => <button type="button" className="variable-chip" key={variable.token} title={variable.description} onMouseDown={e => e.preventDefault()} onClick={() => {
+              // 点击变量时追加对应占位符，避免将用户模板格式写死。
+              const key = templateTarget === "file" ? "fileTemplate" : "folderTemplate";
+              saveFilenameSettings({...filenameSettings, [key]: filenameSettings[key] + variable.token});
+            }}><code>{variable.token}</code><span>{variable.label}</span></button>)}</div>
+          </div>
+          <div className="filename-preview"><span>文件名预览</span><div><FileImage size={18}/><code>{previewFilename}</code><button className="icon-button" aria-label="复制文件名预览" onClick={() => { void navigator.clipboard?.writeText(previewFilename); notify("文件名预览已复制（如果系统允许剪贴板访问）。"); }}><ArrowRight size={16}/></button></div></div>
+          <div className="filename-preview"><span>文件夹名称预览</span><div><FolderOpen size={18}/><code>{previewFoldername}</code></div></div>
+          <div className="inline-note"><CircleHelp size={16}/> 非法字符会被安全替换；媒体索引、发布时间和扩展名在真实下载模块接入后由媒体元数据填充。当前阶段仅预览，不会下载文件。</div>
+        </section>
+        <section className="panel settings-section" id="settings-security">
+          <div className="panel-title"><div><strong>安全与数据</strong><span>本地下载目录与数据行为</span></div></div>
+          <Field label="下载根目录"><div className="input-with-button"><input value={downloadPath} onChange={e => setDownloadPath(e.target.value)}/><button className="button secondary" onClick={() => notify("目录选择器将在桌面运行环境接入。")}><FolderOpen size={15}/> 选择目录</button></div></Field>
+          <p className="muted small">所有下载文件将直接放入由文件夹模板生成的用户文件夹，不再创建 img、live、video 等媒体类型子目录。窗口尺寸会在调整时自动保存；下次启动恢复尺寸，窗口位置每次默认居中。</p>
+        </section>
+      </div>
+    </section>;
     return <section className="page-stack"><PageHeading title="账号管理" subtitle="管理微博会话。当前阶段仅演示交互，不连接微博。" /><Accounts notify={notify}/></section>;
   };
-  return <div className={dark ? "app-shell dark" : "app-shell"}>
-    <aside className="sidebar"><div className="brand"><div className="brand-mark"><Activity size={21}/></div><div><strong>Weibo Manager</strong><span>微博管理工作台</span></div></div><div className="workspace-label">工作空间</div><nav>{["概览","微博管理","系统"].map(group => <div className="nav-group" key={group}><div className="nav-group-label">{group}</div>{nav.filter(item => item.group === group).map(item => { const Icon = item.icon; return <button key={item.id} className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => setPage(item.id)}><Icon size={17}/><span>{item.label}</span>{item.id === "tasks" && <span className="nav-count">{tasks.length}</span>}</button>; })}</div>)}</nav><div className="sidebar-bottom"><div className="connection"><span className="connection-dot"/><div><strong>模拟模式</strong><span>尚未连接微博</span></div></div><div className="version">WEIBO MANAGER <span>v0.1.0 · 阶段 1</span></div></div></aside>
+  // 应用外壳固定视口尺寸，滚动仅交由右侧内容区处理。\n  return <div className={dark ? "app-shell dark" : "app-shell"}>
+    <aside className="sidebar"><div className="brand"><div className="brand-mark"><Activity size={21}/></div><div><strong>Weibo Manager</strong><span>微博管理工作台</span></div></div><div className="workspace-label">工作空间</div><nav>{["概览","微博管理","系统"].map(group => <div className="nav-group" key={group}><div className="nav-group-label">{group}</div>{nav.filter(item => item.group === group).map(item => { const Icon = item.icon; return <React.Fragment key={item.id}><button className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => { setPage(item.id); if (item.id === "settings") setSettingSection("general"); }}><Icon size={17}/><span>{item.label}</span>{item.id === "tasks" && <span className="nav-count">{tasks.length}</span>}{item.id === "settings" && <ChevronDown size={14} className={page === "settings" ? "nav-chevron expanded" : "nav-chevron"}/>}</button>{item.id === "settings" && page === "settings" && <div className="settings-subnav"><button className={settingSection === "general" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("general"); document.getElementById("settings-general")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><Settings2 size={14}/>常规设置</button><button className={settingSection === "filename" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("filename"); document.getElementById("settings-filename")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><FileImage size={14}/>文件命名</button><button className={settingSection === "security" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("security"); document.getElementById("settings-security")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><ShieldCheck size={14}/>安全与数据</button></div>}</React.Fragment>; })}</div>)}</nav><div className="sidebar-bottom"><div className="connection"><span className="connection-dot"/><div><strong>模拟模式</strong><span>尚未连接微博</span></div></div><div className="version">WEIBO MANAGER <span>v0.1.0 · 阶段 1</span></div></div></aside>
     <main className="main-area"><header className="topbar"><div className="breadcrumbs"><span>Weibo Manager</span><span className="crumb-slash">/</span><strong>{pageTitle}</strong></div><div className="topbar-actions"><span className="mode-pill"><span/>模拟数据</span><button className="icon-button" title="帮助" onClick={() => notify("阶段 1 使用模拟数据，不会连接微博或执行真实操作。")}><CircleHelp size={18}/></button><button className="icon-button" title={dark ? "切换浅色" : "切换深色"} onClick={() => setDark(v => !v)}>{dark ? <Sun size={18}/> : <Moon size={18}/>}</button><div className="profile-chip"><div className="avatar small-avatar">W</div><div><strong>本地工作区</strong><span>未登录</span></div><ChevronDown size={14}/></div></div></header><div className="content">{renderPage()}</div><footer className="footer"><span>Weibo Manager · 阶段 1 界面预览</span><span>所有微博操作均为模拟数据</span></footer></main>
     {toast && <div className="toast"><Check size={17}/>{toast}</div>}
   </div>;
