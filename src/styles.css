@@ -36,9 +36,10 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .dark .settings-subnav-item:hover, .dark .settings-subnav-item.active { background: #2b3555; color: #aebcff; }
 .dark .variable-chip { background: #191f2a; border-color: #394153; }
 
-/* 目标用户队列中的 LivePhoto 提示与表单保持均匀的上下间距。 */
-.download-livephoto-note { margin: 0 20px 2px; padding: 13px 0 2px; line-height: 1.6; }
 
 /* 品牌标识使用统一的白底矢量微博 Logo。 */
 .brand-mark { background: #fff; box-shadow: none; border: 1px solid #f0f1f3; overflow: hidden; }
 .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+
+/* 提示文字移除后，恢复目标用户队列面板底部留白。 */
+.download-user-panel { padding-bottom: 18px; }
