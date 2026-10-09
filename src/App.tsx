@@ -1,4 +1,5 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Activity, Archive, ArrowDownToLine, ArrowRight, Check, ChevronDown, CircleHelp,
   Clock3, CloudDownload, FileImage, FolderOpen, Gauge, Home, Image, ListTodo,
@@ -186,11 +187,130 @@ function Stat({ label, value, icon: Icon, helper }: {label: string; value: strin
 function Dashboard({ tasks, go }: {tasks: Task[]; go: (page: Page) => void}) {
   return <section className="page-stack"><PageHeading title="工作台" subtitle="微博管理任务概览，快速进入常用功能。" actions={<span className="date-chip"><Clock3 size={15}/> 本地工作区</span>}/><div className="stats-grid four"><Stat label="已连接账号" value="0" icon={Users} helper="完成登录后显示"/><Stat label="下载任务" value={String(tasks.filter(t => t.kind === "下载").length)} icon={CloudDownload} helper="包含历史模拟任务"/><Stat label="删除任务" value={String(tasks.filter(t => t.kind === "删除").length)} icon={Trash2} helper="真实删除尚未启用"/><Stat label="已下载媒体" value="126" icon={FileImage} helper="模拟统计数据"/></div><div className="dashboard-columns"><div className="panel"><div className="panel-title"><div><strong>最近任务</strong><span>查看下载与删除的最新进展</span></div><button className="text-button" onClick={() => go("tasks")}>全部任务 <ArrowRight size={14}/></button></div><div className="recent-list">{tasks.slice(0, 3).map(task => <div className="recent-row" key={task.id}><div className={task.kind === "下载" ? "recent-icon blue-bg" : "recent-icon amber-bg"}>{task.kind === "下载" ? <CloudDownload size={17}/> : <Trash2 size={17}/>}</div><div className="recent-info"><strong>{task.title}</strong><span>{task.detail}</span></div><TaskBadge state={task.state}/></div>)}</div></div><div className="panel quick-panel"><div className="panel-title"><div><strong>快捷操作</strong><span>开始常用工作流</span></div></div><button className="quick-action" onClick={() => go("download")}><div className="quick-icon blue-bg"><CloudDownload size={18}/></div><div><strong>下载媒体</strong><span>按用户备份图片和视频</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("delete")}><div className="quick-icon amber-bg"><Trash2 size={18}/></div><div><strong>整理微博</strong><span>筛选并预览待删除内容</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("accounts")}><div className="quick-icon green-bg"><Users size={18}/></div><div><strong>管理账号</strong><span>准备账号登录方式</span></div><ArrowRight size={16}/></button></div></div></section>;
 }
+type WeiboAccount = { uid: string; screenName: string; avatarUrl?: string | null };
+
 function Accounts({ notify }: {notify: (message: string) => void}) {
   const [method, setMethod] = useState<"qr" | "cookie">("qr");
   const [cookie, setCookie] = useState("");
-  const [qrState, setQrState] = useState("等待生成二维码");
-  return <div className="page-stack"><div className="panel account-panel"><div className="panel-title"><div><strong>连接微博账号</strong><span>阶段 1 使用模拟登录状态，不会提交凭据</span></div><span className="tag neutral">未登录</span></div><div className="segmented"><button className={method === "qr" ? "selected" : ""} onClick={() => setMethod("qr")}>扫码登录</button><button className={method === "cookie" ? "selected" : ""} onClick={() => setMethod("cookie")}>导入 Cookie</button></div>{method === "qr" ? <div className="qr-layout"><div className="qr-placeholder"><div className="qr-inner"><div className="qr-corner tl"/><div className="qr-corner tr"/><div className="qr-corner bl"/><div className="qr-pattern">{Array.from({length: 49}, (_, i) => <i key={i} style={{opacity: ((i * 17 + 5) % 11) > 3 ? 1 : .12}}/>)}</div></div><div className="qr-overlay"><LockKeyhole size={20}/></div></div><div className="qr-copy"><h3>{qrState}</h3><p>正式登录将在阶段 2 接入微博当前授权流程。此二维码仅用于界面布局演示。</p><button className="button secondary" onClick={() => { setQrState("模拟二维码已刷新"); notify("演示状态已刷新，不是真实微博二维码。"); }}><RefreshCw size={15}/> 刷新演示状态</button><div className="security-note"><ShieldCheck size={16}/> 正式版本将验证授权状态并安全保存会话。</div></div></div> : <div className="cookie-import"><Field label="微博 Cookie"><textarea rows={5} placeholder="阶段 2 将支持导入 Cookie；当前不读取或保存输入内容。" value={cookie} onChange={e => setCookie(e.target.value)} /></Field><div className="inline-note"><LockKeyhole size={16}/> 当前演示不会上传、验证或持久化 Cookie。</div><button className="button primary" onClick={() => { setCookie(""); notify("阶段 1 不处理 Cookie，输入内容已清空。"); }}>清空输入</button></div>}</div><div className="panel"><div className="panel-title"><div><strong>账号列表</strong><span>已连接的微博账号将在此显示</span></div></div><EmptyState title="尚未连接账号" description="阶段 2 完成后，可以通过扫码或导入 Cookie 连接账号。"/></div></div>;
+  const [qrState, setQrState] = useState("尚未开始登录");
+  const [account, setAccount] = useState<WeiboAccount | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  // 启动时只读取后端返回的账号资料，不让认证 Cookie 进入前端状态或日志。
+  useEffect(() => {
+    invoke<WeiboAccount | null>("get_weibo_account")
+      .then(setAccount)
+      .catch(() => setAccount(null));
+  }, []);
+
+  const startQrLogin = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await invoke("start_qr_login");
+      setQrState("请在微博登录窗口完成扫码，然后回来验证登录");
+    } catch (reason) {
+      setError(String(reason));
+      setQrState("无法打开微博登录窗口");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const finishQrLogin = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const verified = await invoke<WeiboAccount>("finish_qr_login");
+      setAccount(verified);
+      setQrState("登录成功");
+      notify(`已连接微博账号：${verified.screenName}`);
+    } catch (reason) {
+      setError(String(reason));
+      setQrState("尚未验证成功，请确认扫码已完成");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const importCookie = async () => {
+    if (!cookie.trim()) {
+      setError("请先粘贴本人微博登录 Cookie。");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const verified = await invoke<WeiboAccount>("import_weibo_cookie", { cookie: cookie.trim() });
+      setAccount(verified);
+      setCookie("");
+      notify(`已验证并连接微博账号：${verified.screenName}`);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const logout = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await invoke("logout_weibo");
+      setAccount(null);
+      setQrState("尚未开始登录");
+      setCookie("");
+      notify("已退出微博账号。");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return <div className="page-stack">
+    <div className="panel account-panel">
+      <div className="panel-title">
+        <div><strong>连接微博账号</strong><span>扫码登录或导入 Cookie；只有通过服务端验证后才会显示为已登录</span></div>
+        <span className={`tag ${account ? "green" : "neutral"}`}>{account ? "已登录" : "未登录"}</span>
+      </div>
+      {account && <div className="connected-account">
+        <div className="avatar">{account.screenName.slice(0, 1).toUpperCase()}</div>
+        <div className="user-info"><strong>{account.screenName}</strong><span>微博 UID：{account.uid}</span></div>
+        <button className="button ghost" onClick={logout} disabled={busy}>退出登录</button>
+      </div>}
+      <div className="segmented">
+        <button className={method === "qr" ? "selected" : ""} onClick={() => { setMethod("qr"); setError(""); }}>扫码登录</button>
+        <button className={method === "cookie" ? "selected" : ""} onClick={() => { setMethod("cookie"); setError(""); }}>导入 Cookie</button>
+      </div>
+      {method === "qr" ? <div className="qr-layout">
+        <div className="qr-placeholder"><div className="qr-inner"><div className="qr-corner tl"/><div className="qr-corner tr"/><div className="qr-corner bl"/><div className="qr-pattern">{Array.from({length: 49}, (_, i) => <i key={i} style={{opacity: ((i * 17 + 5) % 11) > 3 ? 1 : .12}}/>)}</div></div><div className="qr-overlay"><LockKeyhole size={20}/></div></div>
+        <div className="qr-copy">
+          <h3>{qrState}</h3>
+          <p>点击下方按钮打开微博官方登录页面。登录完成后，返回此处验证会话；不会仅凭扫码动作判断成功。</p>
+          <div className="account-actions">
+            <button className="button secondary" onClick={startQrLogin} disabled={busy}><RefreshCw size={15}/> 打开微博扫码登录</button>
+            <button className="button primary" onClick={finishQrLogin} disabled={busy}>已登录，验证并获取 Cookie</button>
+          </div>
+          <div className="security-note"><ShieldCheck size={16}/> Cookie 仅由 Rust 后端读取和使用，不返回前端，也不会写入普通日志。</div>
+        </div>
+      </div> : <div className="cookie-import">
+        <Field label="微博 Cookie"><textarea rows={5} placeholder="粘贴本人微博登录后的 Cookie 请求头内容" value={cookie} onChange={e => setCookie(e.target.value)} autoComplete="off" /></Field>
+        <div className="inline-note"><LockKeyhole size={16}/> Cookie 将由后端验证；验证成功后仅保存在当前应用进程内存中。</div>
+        <button className="button primary" onClick={importCookie} disabled={busy}>验证并连接账号</button>
+      </div>}
+      {error && <div className="auth-error" role="alert">{error}</div>}
+    </div>
+    <div className="panel">
+      <div className="panel-title"><div><strong>账号列表</strong><span>显示已经验证的真实微博账号</span></div></div>
+      {account ? <div className="connected-account">
+        <div className="avatar">{account.screenName.slice(0, 1).toUpperCase()}</div>
+        <div className="user-info"><strong>{account.screenName}</strong><span>UID：{account.uid} · 当前会话有效</span></div>
+        <span className="tag green">已连接</span>
+      </div> : <EmptyState title="尚未连接账号" description="使用扫码登录或导入 Cookie，并通过真实会话验证后即可连接账号。"/>}
+    </div>
+  </div>;
 }
 function TaskBadge({ state }: {state: TaskState}) { const cls = state === "已完成" ? "green" : state === "执行中" ? "blue" : state === "失败" ? "red" : state === "等待中" ? "amber" : "neutral"; return <span className={`tag ${cls}`}><span className="tag-dot"/>{state}</span>; }
 function EmptyState({ title, description }: {title: string; description: string}) { return <div className="empty-state"><div className="empty-icon"><Archive size={22}/></div><strong>{title}</strong><span>{description}</span></div>; }

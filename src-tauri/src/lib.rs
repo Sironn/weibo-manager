@@ -1,3 +1,5 @@
+mod auth;
+
 use rusqlite::Connection;
 use std::{fs, path::PathBuf};
 use tauri::{Manager, RunEvent, WindowEvent};
@@ -19,6 +21,8 @@ fn save_window_size(app: &tauri::AppHandle, width: f64, height: f64) {
 pub fn run() {
     let app = tauri::Builder::default()
         .setup(|app| {
+            // 认证会话只由 Rust 后端持有，避免把 Cookie 暴露给前端状态。
+            app.manage(auth::SessionStore::default());
             let tray = tauri::tray::TrayIconBuilder::new()
                 .icon(app.default_window_icon().cloned().expect("default window icon missing"))
                 .build(app)?;
@@ -51,6 +55,13 @@ pub fn run() {
             }
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![
+            auth::start_qr_login,
+            auth::finish_qr_login,
+            auth::import_weibo_cookie,
+            auth::get_weibo_account,
+            auth::logout_weibo,
+        ])
         .build(tauri::generate_context!())
         .expect("error while building Weibo Manager");
 
