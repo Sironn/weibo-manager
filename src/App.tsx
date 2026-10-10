@@ -204,12 +204,38 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
       .catch(() => setAccount(null));
   }, []);
 
+  // 登录窗口打开后自动轮询后端；后端只在验证成功时返回账号资料并关闭窗口。
+  useEffect(() => {
+    if (qrState !== "等待微博扫码登录完成…" || account) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const pollLogin = async () => {
+      try {
+        const verified = await invoke<WeiboAccount | null>("check_qr_login");
+        if (verified && !cancelled) {
+          setAccount(verified);
+          setQrState("登录成功");
+          setError("");
+          return;
+        }
+      } catch {
+        // 自动检测过程中的暂时错误不打断等待；手动验证仍会显示具体原因。
+      }
+      if (!cancelled) timer = window.setTimeout(pollLogin, 3000);
+    };
+    timer = window.setTimeout(pollLogin, 1500);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [qrState, account]);
+
   const startQrLogin = async () => {
     setBusy(true);
     setError("");
     try {
       await invoke("start_qr_login");
-      setQrState("请在微博登录窗口完成扫码，然后回来验证登录");
+      setQrState("等待微博扫码登录完成…");
     } catch (reason) {
       setError(String(reason));
       setQrState("无法打开微博登录窗口");

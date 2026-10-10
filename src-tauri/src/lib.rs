@@ -58,6 +58,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth::start_qr_login,
             auth::finish_qr_login,
+            auth::check_qr_login,
             auth::import_weibo_cookie,
             auth::get_weibo_account,
             auth::logout_weibo,

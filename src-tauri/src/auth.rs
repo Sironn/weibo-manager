@@ -20,7 +20,7 @@ const COOKIE_URLS: &[&str] = &[
     "https://m.weibo.cn/",
     "https://weibo.cn/",
 ];
-const PROFILE_URL: &str = "https://weibo.com/ajax/side/nav";
+const PROFILE_URL: &str = "https://weibo.com/ajax/setting/getBasicInfo";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,6 +88,54 @@ fn collect_login_cookie(window: WebviewWindow) -> Result<String, String> {
         .map(|(name, value)| format!("{name}={value}"))
         .collect::<Vec<_>>()
         .join("; "))
+}
+
+/// 自动轮询扫码登录状态。未完成扫码或临时验证失败时返回 None，不向前端暴露 Cookie。
+#[tauri::command]
+pub async fn check_qr_login(
+    app: AppHandle,
+    store: State<'_, SessionStore>,
+) -> Result<Option<WeiboAccount>, String> {
+    let Some(login_window) = app.get_webview_window("weibo-login") else {
+        return Ok(None);
+    };
+
+    let cookie = match tauri::async_runtime::spawn_blocking(move || collect_login_cookie(login_window)).await {
+        Ok(Ok(cookie)) => cookie,
+        // 登录窗口初始化期间可能暂时没有 Cookie；继续等待即可。
+        _ => return Ok(None),
+    };
+
+    // 只有出现登录态相关 Cookie 后才访问验证接口，避免扫码前频繁请求微博。
+    if !has_login_cookie(&cookie) {
+        return Ok(None);
+    }
+
+    let account = match validate_cookie(&cookie).await {
+        Ok(account) => account,
+        // 扫码流程中接口可能暂时拒绝请求，下一轮继续检测；手动验证/导入仍会显示具体错误。
+        Err(_) => return Ok(None),
+    };
+
+    {
+        let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
+        *current = Some(ActiveSession {
+            cookie,
+            account: account.clone(),
+        });
+    }
+
+    if let Some(window) = app.get_webview_window("weibo-login") {
+        let _ = window.close();
+    }
+    Ok(Some(account))
+}
+
+fn has_login_cookie(cookie: &str) -> bool {
+    cookie.split(';').filter_map(|part| part.trim().split_once('='))
+        .any(|(name, value)| {
+            !value.is_empty() && matches!(name.trim(), "SUB" | "SUBP" | "SSOLoginState" | "ALF")
+        })
 }
 
 #[tauri::command]
@@ -159,14 +207,32 @@ async fn validate_cookie(cookie: &str) -> Result<WeiboAccount, String> {
         .await
         .map_err(|_| "连接微博验证接口失败，请检查网络或代理设置。".to_string())?;
 
-    if !response.status().is_success() {
-        return Err(format!("微博验证接口返回 HTTP {}，请检查 Cookie 是否有效。", response.status()));
+    let status = response.status();
+    if !status.is_success() {
+        return Err(match status.as_u16() {
+            401 => "微博拒绝了当前会话（HTTP 401），Cookie 可能已过期，请重新登录。".to_string(),
+            403 => "微博验证请求被拒绝（HTTP 403），可能触发了安全限制；请稍后重试或在微博网页确认登录状态。".to_string(),
+            404 => "微博账号验证接口返回 HTTP 404，接口地址可能已调整；这不代表 Cookie 一定无效。".to_string(),
+            429 | 432 => format!("微博暂时限制了验证请求（HTTP {}），请稍后重试。", status.as_u16()),
+            _ => format!("微博验证接口返回 HTTP {}，请稍后重试。", status),
+        });
     }
 
     let body = response
         .json::<Value>()
         .await
-        .map_err(|_| "微博返回的数据无法识别，Cookie 可能已失效。".to_string())?;
+        .map_err(|_| "微博返回的数据无法识别，请确认网络未被拦截后重试。".to_string())?;
+    if body.get("ok").and_then(Value::as_i64).is_some_and(|ok| ok != 1) {
+        let message = body.get("msg").and_then(Value::as_str).unwrap_or("");
+        if message.contains("登录") || message.contains("未登录") || message.contains("登录状态") {
+            return Err("微博未确认当前登录状态，Cookie 可能已过期，请重新登录。".into());
+        }
+        return Err(if message.is_empty() {
+            "微博未确认当前登录状态，请重新登录后重试。".into()
+        } else {
+            format!("微博验证未通过：{message}")
+        });
+    }
     let data = body.get("data").unwrap_or(&body);
     let user = data
         .get("userInfo")
