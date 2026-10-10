@@ -119,8 +119,14 @@ async fn wait_request_interval(app: &AppHandle) {
     tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(delay))).await.ok();
 }
 fn looks_rate_limited(body: &Value) -> bool {
-    let text = body.to_string().to_lowercase();
-    [\"429\", \"10023\", \"10024\", \"rate limit\", \"too many requests\", \"请求过于频繁\", \"操作频繁\", \"访问频次\", \"频率过高\"]
+    let mut messages = Vec::new();
+    for key in ["msg", "errmsg", "message", "error", "error_code", "code", "errno"] {
+        if let Some(value) = body.get(key) {
+            messages.push(value.to_string().to_lowercase());
+        }
+    }
+    let text = messages.join(" ");
+    ["429", "10023", "10024", "rate limit", "too many requests", "请求过于频繁", "操作频繁", "访问频次", "频率过高"]
         .iter().any(|needle| text.contains(needle))
 }
 #[tauri::command]
