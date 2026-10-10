@@ -15,15 +15,11 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let saved_settings = settings::load_with_migration(&handle);
-            // 启动时从本地 Settings.json 恢复 Cookie；Cookie 不写入日志。
+            // 启动时从独立配置文件恢复 Cookie；Cookie 不写入日志。
             app.manage(auth::SessionStore::from_saved_cookie(saved_settings.cookie.clone()));
-            let tray = tauri::tray::TrayIconBuilder::new()
-                .icon(app.default_window_icon().cloned().expect("default window icon missing"))
-                .build(app)?;
-            app.manage(tray);
             if let Some(window) = app.get_webview_window("main") {
-                let width = saved_settings.width.unwrap_or(1280.0).clamp(980.0, 2400.0);
-                let height = saved_settings.height.unwrap_or(820.0).clamp(640.0, 1800.0);
+                let width = saved_settings.window_size.width.unwrap_or(1280.0).clamp(980.0, 2400.0);
+                let height = saved_settings.window_size.height.unwrap_or(820.0).clamp(640.0, 1800.0);
                 let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }));
                 // The size is restored, but the position is never persisted.
                 let _ = window.center();
@@ -45,11 +41,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth::start_qr_login,
             auth::finish_qr_login,
-            auth::check_qr_login,
+            auth::is_qr_login_window_open,
+            auth::close_qr_login_window,
             auth::import_weibo_cookie,
             auth::get_weibo_account,
             auth::get_weibo_cookie,
             auth::logout_weibo,
+            settings::get_config_file_names,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Weibo Manager");
