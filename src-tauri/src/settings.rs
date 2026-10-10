@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Mutex};
+
+static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
 use tauri::{AppHandle, Manager};
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -55,6 +57,7 @@ pub fn load_with_migration(app: &AppHandle) -> AppSettings {
 }
 
 pub fn update(app: &AppHandle, update: impl FnOnce(&mut AppSettings)) -> Result<(), String> {
+    let _guard = SETTINGS_LOCK.lock().map_err(|_| "应用设置锁定失败，请重启应用后重试。".to_string())?;
     let path = settings_path(app)?;
     let mut settings = read_path(&path);
     update(&mut settings);
