@@ -1,10 +1,10 @@
-//! 微博认证流程：打开官方扫码页面、从 WebView Cookie 存储中读取会话，并验证账号身份。
+//! 微博认证流程：打开官方扫码页面、从 WebView Cookie 存储中读取会话。
 //!
 //! Cookie 属于认证凭据：本模块禁止将其写入日志或返回前端。当前阶段仅在进程内存保存，
-//! 后续可在独立需求中接入系统凭据存储，避免明文落盘。
+//! 登录成功以获取到相关的 .cn 登录 Cookie 为准；Cookie 是否仍可用于具体下载请求，
+//! 应由后续下载接口的实际响应判断。
 
 use serde::Serialize;
-use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use tauri::{
@@ -13,14 +13,12 @@ use tauri::{
 };
 use url::Url;
 
-const LOGIN_URL: &str = "https://passport.weibo.com/sso/signin?entry=miniblog&source=miniblog&url=https%3A%2F%2Fweibo.com%2F";
-// 扫码窗口先收集 weibo.com 登录流程使用的 Cookie，避免把 weibo.cn
-// 的同名 Cookie 合并进同一个请求头，覆盖真正用于 weibo.com 的值。
+const LOGIN_URL: &str = "https://passport.weibo.com/sso/signin?entry=wapsso&source=wapsso&url=https://m.weibo.cn";
+// 只读取移动版及 cn 站点的 Cookie；passport.weibo.com 仅作为认证入口，不进入最终会话。
 const COOKIE_URLS: &[&str] = &[
-    "https://weibo.com/",
-    "https://passport.weibo.com/",
+    "https://m.weibo.cn/",
+    "https://weibo.cn/",
 ];
-const PROFILE_URL: &str = "https://weibo.com/ajax/setting/getBasicInfo";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,7 +61,8 @@ pub async fn start_qr_login(app: AppHandle) -> Result<(), String> {
 }
 
 /// 从嵌入式 WebView 的 Cookie 存储读取 Cookie，包含 HttpOnly/Secure 项。
-/// Windows WebView2 的 Cookie 读取可能阻塞，因此必须放入阻塞任务中执行。
+/// 只查询 m.weibo.cn 和 weibo.cn，避免将 passport.weibo.com 或 weibo.com 的 Cookie
+/// 混入下载会话。Windows WebView2 的 Cookie 读取可能阻塞，因此放入阻塞任务中执行。
 fn collect_login_cookie(window: WebviewWindow) -> Result<String, String> {
     let mut cookie_map = BTreeMap::<String, String>::new();
 
@@ -74,13 +73,13 @@ fn collect_login_cookie(window: WebviewWindow) -> Result<String, String> {
             .map_err(|error| format!("读取微博 Cookie 失败：{error}"))?;
 
         for cookie in cookies {
-            // 以名称去重，避免多个微博子域返回同名 Cookie 时重复拼接请求头。
+            // 与参考项目一致，按 Cookie 名称去重，避免请求头中出现重复名称。
             cookie_map.insert(cookie.name().to_owned(), cookie.value().to_owned());
         }
     }
 
     if cookie_map.is_empty() {
-        return Err("没有读取到微博 Cookie。请先在弹出的窗口完成扫码登录，再重试。".into());
+        return Err("没有读取到 m.weibo.cn 或 weibo.cn 的 Cookie。请先完成扫码登录后重试。".into());
     }
 
     Ok(cookie_map
@@ -90,7 +89,42 @@ fn collect_login_cookie(window: WebviewWindow) -> Result<String, String> {
         .join("; "))
 }
 
-/// 自动轮询扫码登录状态。未完成扫码或临时验证失败时返回 None，不向前端暴露 Cookie。
+/// 登录流程必须取得非空的相关登录 Cookie；不依赖固定账号资料接口返回用户 ID。
+fn has_login_cookie(cookie: &str) -> bool {
+    cookie
+        .split(';')
+        .filter_map(|part| part.trim().split_once('='))
+        .any(|(name, value)| {
+            !value.trim().is_empty()
+                && matches!(name.trim(), "SUB" | "SUBP" | "SSOLoginState" | "ALF")
+        })
+}
+
+fn account_for_acquired_session() -> WeiboAccount {
+    WeiboAccount {
+        // 账号资料不再作为登录门槛；后续真实接口可在成功响应中补充 UID 和昵称。
+        uid: String::new(),
+        screen_name: "微博会话已获取".to_string(),
+        avatar_url: None,
+    }
+}
+
+fn validate_imported_cookie_format(cookie: &str) -> Result<(), String> {
+    let has_valid_pair = cookie.split(';').any(|part| {
+        let Some((name, value)) = part.trim().split_once('=') else {
+            return false;
+        };
+        !name.trim().is_empty() && !value.trim().is_empty()
+    });
+
+    if !has_valid_pair {
+        return Err("Cookie 格式不正确，请粘贴包含“名称=值”的单行 Cookie。".into());
+    }
+    Ok(())
+}
+
+/// 自动轮询扫码登录状态。只有读取到相关 .cn 登录 Cookie 后才确认获取成功。
+/// 不向前端暴露 Cookie，也不调用固定资料接口判断登录状态。
 #[tauri::command]
 pub async fn check_qr_login(
     app: AppHandle,
@@ -106,17 +140,11 @@ pub async fn check_qr_login(
         _ => return Ok(None),
     };
 
-    // 只有出现登录态相关 Cookie 后才访问验证接口，避免扫码前频繁请求微博。
     if !has_login_cookie(&cookie) {
         return Ok(None);
     }
 
-    let account = match validate_cookie(&cookie).await {
-        Ok(account) => account,
-        // 扫码流程中接口可能暂时拒绝请求，下一轮继续检测；手动验证/导入仍会显示具体错误。
-        Err(_) => return Ok(None),
-    };
-
+    let account = account_for_acquired_session();
     {
         let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
         *current = Some(ActiveSession {
@@ -129,13 +157,6 @@ pub async fn check_qr_login(
         let _ = window.close();
     }
     Ok(Some(account))
-}
-
-fn has_login_cookie(cookie: &str) -> bool {
-    cookie.split(';').filter_map(|part| part.trim().split_once('='))
-        .any(|(name, value)| {
-            !value.is_empty() && matches!(name.trim(), "SUB" | "SUBP" | "SSOLoginState" | "ALF")
-        })
 }
 
 #[tauri::command]
@@ -151,7 +172,11 @@ pub async fn finish_qr_login(
         .await
         .map_err(|error| format!("读取登录窗口 Cookie 的任务失败：{error}"))??;
 
-    let account = validate_cookie(&cookie).await?;
+    if !has_login_cookie(&cookie) {
+        return Err("尚未读取到有效的 m.weibo.cn / weibo.cn 登录 Cookie，请确认扫码登录已完成。".into());
+    }
+
+    let account = account_for_acquired_session();
     {
         let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
         *current = Some(ActiveSession {
@@ -160,7 +185,6 @@ pub async fn finish_qr_login(
         });
     }
 
-    // 只有服务器确认会话有效后才关闭登录窗口，避免把未完成扫码误判为成功。
     if let Some(window) = app.get_webview_window("weibo-login") {
         let _ = window.close();
     }
@@ -179,8 +203,10 @@ pub async fn import_weibo_cookie(
     if cookie.contains('\n') || cookie.contains('\r') {
         return Err("Cookie 格式不正确，请粘贴单行 Cookie 请求头。".into());
     }
+    validate_imported_cookie_format(&cookie)?;
 
-    let account = validate_cookie(&cookie).await?;
+    // 导入时不请求固定资料接口。Cookie 的实际可用性由后续 m.weibo.cn 下载响应判断。
+    let account = account_for_acquired_session();
     let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
     *current = Some(ActiveSession {
         cookie,
@@ -189,123 +215,7 @@ pub async fn import_weibo_cookie(
     Ok(account)
 }
 
-/// 通过与 Cookie 域名匹配的微博接口验证会话，并从实际响应中提取账号资料。
-/// 手动导入的 Cookie 不携带域名信息，因此依次尝试 weibo.com 与 m.weibo.cn。
-async fn validate_cookie(cookie: &str) -> Result<WeiboAccount, String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-        .build()
-        .map_err(|error| format!("无法初始化微博请求客户端：{error}"))?;
-
-    let endpoints = [
-        ("https://weibo.com/ajax/setting/getBasicInfo", "https://weibo.com/"),
-        ("https://m.weibo.cn/api/config", "https://m.weibo.cn/"),
-    ];
-    let mut last_error = "微博未确认登录身份。请确认 Cookie 来源域名与登录状态后重试。".to_string();
-
-    for (endpoint, referer) in endpoints {
-        let response = match client
-            .get(endpoint)
-            .header(reqwest::header::COOKIE, cookie)
-            .header(reqwest::header::REFERER, referer)
-            .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(_) => {
-                last_error = "连接微博验证接口失败，请检查网络或代理设置。".to_string();
-                continue;
-            }
-        };
-
-        let status = response.status();
-        if !status.is_success() {
-            last_error = match status.as_u16() {
-                401 => "微博拒绝了当前会话（HTTP 401），Cookie 可能已过期。".to_string(),
-                403 => "微博验证请求被拒绝（HTTP 403），可能触发了安全限制；请稍后重试。".to_string(),
-                404 => format!("微博验证接口返回 HTTP 404：{endpoint}"),
-                429 | 432 => format!("微博暂时限制了验证请求（HTTP {}），请稍后重试。", status.as_u16()),
-                _ => format!("微博验证接口返回 HTTP {}。", status.as_u16()),
-            };
-            continue;
-        }
-
-        let body = match response.json::<Value>().await {
-            Ok(body) => body,
-            Err(_) => {
-                last_error = "微博返回的数据无法识别，请确认网络未被拦截后重试。".to_string();
-                continue;
-            }
-        };
-
-        if body.get("ok").and_then(Value::as_i64).is_some_and(|ok| ok != 1) {
-            let message = body.get("msg").and_then(Value::as_str).unwrap_or("");
-            last_error = if message.is_empty() {
-                "微博未确认当前登录状态，请重新登录后重试。".to_string()
-            } else {
-                format!("微博验证未通过：{message}")
-            };
-            continue;
-        }
-
-        // 不假定账号资料一定在 data.userInfo；微博不同域名/接口的响应层级不同。
-        let uid = find_nested_string(&body, &["uid", "id", "idstr"])
-            .filter(|value| !value.is_empty());
-        let Some(uid) = uid else {
-            last_error = format!(
-                "接口 {endpoint} 已响应，但返回内容中没有可识别的用户 ID；请确认使用的是本人登录后的 Cookie。"
-            );
-            continue;
-        };
-
-        let screen_name = find_nested_string(&body, &["screen_name", "screenName", "nick", "nickname", "name"])
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| format!("微博用户 {uid}"));
-        let avatar_url = find_nested_string(&body, &["avatar_large", "profile_image_url", "avatar", "profile_image"])
-            .filter(|value| !value.is_empty());
-
-        return Ok(WeiboAccount { uid, screen_name, avatar_url });
-    }
-
-    Err(last_error)
-}
-
-/// 在 JSON 对象的嵌套结构中查找指定字段；兼容微博接口响应层级差异。
-fn find_nested_string(value: &Value, keys: &[&str]) -> Option<String> {
-    if let Some(object) = value.as_object() {
-        for key in keys {
-            if let Some(found) = value_as_string(object.get(*key)) {
-                if !found.is_empty() {
-                    return Some(found);
-                }
-            }
-        }
-        for child in object.values() {
-            if let Some(found) = find_nested_string(child, keys) {
-                return Some(found);
-            }
-        }
-    } else if let Some(array) = value.as_array() {
-        for child in array {
-            if let Some(found) = find_nested_string(child, keys) {
-                return Some(found);
-            }
-        }
-    }
-    None
-}
-
-fn value_as_string(value: Option<&Value>) -> Option<String> {
-    match value? {
-        Value::String(text) => Some(text.clone()),
-        Value::Number(number) => Some(number.to_string()),
-        _ => None,
-    }
-}
-
-/// 只向前端返回账号资料，不返回 Cookie 本身。
+/// 只向前端返回账号状态，不返回 Cookie 本身。
 #[tauri::command]
 pub fn get_weibo_account(store: State<'_, SessionStore>) -> Result<Option<WeiboAccount>, String> {
     let current = store.0.lock().map_err(|_| "读取认证状态失败，请重启应用后重试。".to_string())?;
