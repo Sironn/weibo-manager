@@ -5,8 +5,9 @@ use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::auth::SessionStore;
 
@@ -101,19 +102,55 @@ fn parse_post(mblog: &Value) -> Option<WeiboPost> {
     Some(WeiboPost { id, date, created_at, kind, text: post_text(mblog), media })
 }
 
+/// 控制列表读取暂停状态；读取任务在每次网络请求前检查此标记。
+#[derive(Default)]
+pub struct DeleteSearchControl { paused: AtomicBool }
 #[tauri::command]
-pub async fn get_delete_posts(date_from: String, store: State<'_, SessionStore>) -> Result<Vec<WeiboPost>, String> {
+pub fn set_delete_search_paused(paused: bool, control: State<'_, DeleteSearchControl>) {
+    control.paused.store(paused, Ordering::Relaxed);
+}
+async fn wait_for_search_resume(control: &DeleteSearchControl) {
+    while control.paused.load(Ordering::Relaxed) {
+        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(150))).await.ok();
+    }
+}
+async fn wait_request_interval(app: &AppHandle) {
+    let delay = crate::settings::request_delay_ms(app);
+    tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(delay))).await.ok();
+}
+fn looks_rate_limited(body: &Value) -> bool {
+    let text = body.to_string().to_lowercase();
+    [\"429\", \"10023\", \"10024\", \"rate limit\", \"too many requests\", \"请求过于频繁\", \"操作频繁\", \"访问频次\", \"频率过高\"]
+        .iter().any(|needle| text.contains(needle))
+}
+#[tauri::command]
+pub async fn get_delete_posts(
+    date_from: String,
+    app: AppHandle,
+    store: State<'_, SessionStore>,
+    control: State<'_, DeleteSearchControl>,
+) -> Result<Vec<WeiboPost>, String> {
     let cookie = store.cookie()?;
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(25)).build()
         .map_err(|e| format!("初始化微博请求失败：{e}"))?;
+    wait_for_search_resume(&control).await;
     let config = client.get("https://m.weibo.cn/api/config")
         .header(COOKIE, cookie.as_str()).header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
         .header(ACCEPT, "application/json, text/plain, */*").send().await
         .map_err(|e| format!("获取微博账号信息失败，请检查网络：{e}"))?;
+    if config.status().as_u16() == 401 || config.status().as_u16() == 403 {
+        return Err("微博拒绝了账号信息请求（401/403）。请检查登录状态，必要时重新登录。".into());
+    }
+    if config.status().as_u16() == 429 {
+        return Err("微博返回限流响应（HTTP 429），已停止读取。请等待一段时间后再试。".into());
+    }
     if !config.status().is_success() {
         return Err(format!("获取微博账号信息失败，HTTP {}", config.status().as_u16()));
     }
     let config_json: Value = config.json().await.map_err(|e| format!("微博账号信息解析失败：{e}"))?;
+    if looks_rate_limited(&config_json) {
+        return Err("微博提示请求过于频繁，已停止读取。请等待一段时间后再试。".into());
+    }
     let uid = config_json.pointer("/data/uid").and_then(Value::as_u64)
         .map(|v| v.to_string())
         .or_else(|| config_json.pointer("/data/uid").and_then(Value::as_str).map(str::to_string))
@@ -121,22 +158,31 @@ pub async fn get_delete_posts(date_from: String, store: State<'_, SessionStore>)
         .ok_or_else(|| "未能从当前 Cookie 识别微博 UID。请重新登录后再试；当前不会使用模拟数据。".to_string())?;
 
     let mut posts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for page in 1..=100 {
+        wait_for_search_resume(&control).await;
+        wait_request_interval(&app).await;
+        wait_for_search_resume(&control).await;
         let url = format!("https://m.weibo.cn/api/container/getIndex?containerid=107603{uid}&page={page}");
         let response = client.get(&url).header(COOKIE, &cookie)
             .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
             .header(REFERER, "https://m.weibo.cn/").header(ACCEPT, "application/json, text/plain, */*")
             .send().await.map_err(|e| format!("读取微博列表失败：{e}"))?;
         if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
-            return Err("微博拒绝了列表请求（401/403）。登录可能已失效或触发风控，请稍后重试。".into());
+            return Err("微博拒绝了列表请求（401/403）。请检查登录状态，必要时重新登录。已停止继续请求。".into());
+        }
+        if response.status().as_u16() == 429 || response.status().as_u16() == 418 {
+            return Err(format!("微博返回限流响应（HTTP {}），已停止读取。请等待一段时间后再试。", response.status().as_u16()));
         }
         if !response.status().is_success() {
             return Err(format!("读取微博列表失败，HTTP {}", response.status().as_u16()));
         }
         let body: Value = response.json().await.map_err(|e| format!("微博列表解析失败：{e}"))?;
+        if looks_rate_limited(&body) {
+            return Err("微博提示请求过于频繁或触发风控，已停止读取。请等待一段时间后再试。".into());
+        }
         let cards = body.pointer("/data/cards").and_then(Value::as_array)
             .ok_or_else(|| "微博列表接口没有返回预期数据；请确认登录状态有效。".to_string())?;
-        let before = posts.len();
         let mut page_posts = Vec::new();
         for card in cards {
             if let Some(mblog) = card.get("mblog") {
@@ -145,13 +191,14 @@ pub async fn get_delete_posts(date_from: String, store: State<'_, SessionStore>)
         }
         if page_posts.is_empty() { break; }
         let reached_start = !date_from.trim().is_empty() && page_posts.iter().all(|post| post.date < date_from);
-        posts.extend(page_posts);
-        if posts.len() == before || reached_start { break; }
-        // 降低连续翻页频率；延时只能降低请求密度，不能保证平台不会触发风控。
-        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(1200))).await.ok();
+        for post in page_posts {
+            if seen.insert(post.id.clone()) {
+                posts.push(post.clone());
+                let _ = app.emit("delete-post-item", post);
+            }
+        }
+        if reached_start { break; }
     }
-    posts.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| b.id.cmp(&a.id)));
-    posts.dedup_by(|a, b| a.id == b.id);
     Ok(posts)
 }
 
