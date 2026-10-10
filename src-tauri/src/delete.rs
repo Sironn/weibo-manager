@@ -107,7 +107,7 @@ pub async fn get_delete_posts(date_from: String, store: State<'_, SessionStore>)
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(25)).build()
         .map_err(|e| format!("初始化微博请求失败：{e}"))?;
     let config = client.get("https://m.weibo.cn/api/config")
-        .header(COOKIE, &cookie).header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
+        .header(COOKIE, cookie.as_str()).header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
         .header(ACCEPT, "application/json, text/plain, */*").send().await
         .map_err(|e| format!("获取微博账号信息失败，请检查网络：{e}"))?;
     if !config.status().is_success() {
