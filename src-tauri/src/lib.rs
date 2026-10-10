@@ -1,4 +1,5 @@
 mod auth;
+mod delete;
 mod settings;
 
 use rusqlite::Connection;
@@ -47,6 +48,9 @@ pub fn run() {
             auth::get_weibo_account,
             auth::get_weibo_cookie,
             auth::logout_weibo,
+            delete::get_delete_posts,
+            delete::create_delete_task,
+            delete::get_delete_tasks,
             settings::get_config_file_names,
         ])
         .build(tauri::generate_context!())
