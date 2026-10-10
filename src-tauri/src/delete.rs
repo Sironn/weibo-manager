@@ -165,7 +165,7 @@ pub async fn get_delete_posts(
 
     let mut posts = Vec::new();
     let mut seen = std::collections::HashSet::new();
-    for page in 1..=100 {
+    for page in 1..=1000 {
         wait_for_search_resume(&control).await;
         wait_request_interval(&app).await;
         wait_for_search_resume(&control).await;
