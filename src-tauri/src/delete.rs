@@ -102,17 +102,29 @@ fn parse_post(mblog: &Value) -> Option<WeiboPost> {
     Some(WeiboPost { id, date, created_at, kind, text: post_text(mblog), media })
 }
 
-/// 控制列表读取暂停状态；读取任务在每次网络请求前检查此标记。
+/// 控制列表读取的暂停与取消状态；读取任务在网络请求前后检查这些标记。
 #[derive(Default)]
-pub struct DeleteSearchControl { paused: AtomicBool }
+pub struct DeleteSearchControl {
+    paused: AtomicBool,
+    cancelled: AtomicBool,
+}
 #[tauri::command]
 pub fn set_delete_search_paused(paused: bool, control: State<'_, DeleteSearchControl>) {
     control.paused.store(paused, Ordering::Relaxed);
 }
-async fn wait_for_search_resume(control: &DeleteSearchControl) {
-    while control.paused.load(Ordering::Relaxed) {
+#[tauri::command]
+pub fn set_delete_search_cancelled(cancelled: bool, control: State<'_, DeleteSearchControl>) {
+    control.cancelled.store(cancelled, Ordering::Relaxed);
+    if cancelled {
+        // 取消时解除暂停，避免暂停中的读取任务一直等待。
+        control.paused.store(false, Ordering::Relaxed);
+    }
+}
+async fn wait_for_search_resume(control: &DeleteSearchControl) -> bool {
+    while control.paused.load(Ordering::Relaxed) && !control.cancelled.load(Ordering::Relaxed) {
         tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(150))).await.ok();
     }
+    !control.cancelled.load(Ordering::Relaxed)
 }
 async fn wait_request_interval(app: &AppHandle) {
     let delay = crate::settings::request_delay_ms(app);
@@ -136,14 +148,18 @@ pub async fn get_delete_posts(
     store: State<'_, SessionStore>,
     control: State<'_, DeleteSearchControl>,
 ) -> Result<Vec<WeiboPost>, String> {
+    let mut posts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if !wait_for_search_resume(&control).await { return Ok(posts); }
     let cookie = store.cookie()?;
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(25)).build()
         .map_err(|e| format!("初始化微博请求失败：{e}"))?;
-    wait_for_search_resume(&control).await;
+    if !wait_for_search_resume(&control).await { return Ok(posts); }
     let config = client.get("https://m.weibo.cn/api/config")
         .header(COOKIE, cookie.as_str()).header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
         .header(ACCEPT, "application/json, text/plain, */*").send().await
         .map_err(|e| format!("获取微博账号信息失败，请检查网络：{e}"))?;
+    if control.cancelled.load(Ordering::Relaxed) { return Ok(posts); }
     if config.status().as_u16() == 401 || config.status().as_u16() == 403 {
         return Err("微博拒绝了账号信息请求（401/403）。请检查登录状态，必要时重新登录。".into());
     }
@@ -154,6 +170,7 @@ pub async fn get_delete_posts(
         return Err(format!("获取微博账号信息失败，HTTP {}", config.status().as_u16()));
     }
     let config_json: Value = config.json().await.map_err(|e| format!("微博账号信息解析失败：{e}"))?;
+    if control.cancelled.load(Ordering::Relaxed) { return Ok(posts); }
     if looks_rate_limited(&config_json) {
         return Err("微博提示请求过于频繁，已停止读取。请等待一段时间后再试。".into());
     }
@@ -163,17 +180,16 @@ pub async fn get_delete_posts(
         .filter(|v| !v.is_empty() && v != "0")
         .ok_or_else(|| "未能从当前 Cookie 识别微博 UID。请重新登录后再试；当前不会使用模拟数据。".to_string())?;
 
-    let mut posts = Vec::new();
-    let mut seen = std::collections::HashSet::new();
     for page in 1..=1000 {
-        wait_for_search_resume(&control).await;
+        if !wait_for_search_resume(&control).await { return Ok(posts); }
         wait_request_interval(&app).await;
-        wait_for_search_resume(&control).await;
+        if !wait_for_search_resume(&control).await { return Ok(posts); }
         let url = format!("https://m.weibo.cn/api/container/getIndex?containerid=107603{uid}&page={page}");
         let response = client.get(&url).header(COOKIE, &cookie)
             .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
             .header(REFERER, "https://m.weibo.cn/").header(ACCEPT, "application/json, text/plain, */*")
             .send().await.map_err(|e| format!("读取微博列表失败：{e}"))?;
+        if control.cancelled.load(Ordering::Relaxed) { return Ok(posts); }
         if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
             return Err("微博拒绝了列表请求（401/403）。请检查登录状态，必要时重新登录。已停止继续请求。".into());
         }
@@ -184,6 +200,7 @@ pub async fn get_delete_posts(
             return Err(format!("读取微博列表失败，HTTP {}", response.status().as_u16()));
         }
         let body: Value = response.json().await.map_err(|e| format!("微博列表解析失败：{e}"))?;
+        if control.cancelled.load(Ordering::Relaxed) { return Ok(posts); }
         if looks_rate_limited(&body) {
             return Err("微博提示请求过于频繁或触发风控，已停止读取。请等待一段时间后再试。".into());
         }
