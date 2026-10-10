@@ -321,7 +321,7 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
   return <div className="page-stack">
     <div className="panel account-panel">
       <div className="panel-title">
-        <div><strong>Cookie 已获取</strong><span>扫码登录或导入 Cookie；Cookie 会明文保存在本地 Settings.json 中</span></div>
+        <div><strong>{account ? "Cookie 已获取" : "获取微博 Cookie"}</strong><span>扫码登录或导入 Cookie；Cookie 会明文保存在本地 Settings.json 中</span></div>
         <span className={`tag ${account ? "green" : "neutral"}`}>{account ? "已保存" : "未获取"}</span>
       </div>
       {account && <div className="connected-account">
