@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Activity, Archive, ArrowDownToLine, ArrowRight, Check, ChevronDown, CircleHelp, Copy,
-  Clock3, CloudDownload, Eye, EyeOff, FileImage, FolderOpen, Gauge, Home, Image, ListTodo,
+  CloudDownload, Eye, EyeOff, FileImage, FolderOpen, Gauge, Home, Image, ListTodo,
   LockKeyhole, Moon, MoreHorizontal, Play, Plus, RefreshCw, Search, Settings2,
   ShieldCheck, Sun, Trash2, Users, Video, X,
 } from "lucide-react";
@@ -21,7 +21,7 @@ const initialTasks: Task[] = [
 ];
 const nav: { id: Page; label: string; icon: typeof Home; group: string }[] = [
   { id: "dashboard", label: "工作台", icon: Home, group: "概览" },
-  { id: "accounts", label: "账号管理", icon: Users, group: "微博管理" },
+  { id: "accounts", label: "Cookie 管理", icon: LockKeyhole, group: "微博管理" },
   { id: "delete", label: "微博删除", icon: Trash2, group: "微博管理" },
   { id: "download", label: "媒体下载", icon: CloudDownload, group: "微博管理" },
   { id: "tasks", label: "任务中心", icon: ListTodo, group: "系统" },
@@ -170,7 +170,7 @@ function App() {
         </section>
       </div>
     </section>;
-    return <section className="page-stack"><PageHeading title="账号管理" subtitle="管理微博会话。当前阶段仅演示交互，不连接微博。" /><Accounts notify={notify}/></section>;
+    return <section className="page-stack"><PageHeading title="Cookie 管理" subtitle="扫码登录或导入 Cookie" /><Accounts notify={notify}/></section>;
   };
   // 应用外壳固定视口尺寸，滚动仅交由右侧内容区处理。
   return <div className={dark ? "app-shell dark" : "app-shell"}>
@@ -185,7 +185,7 @@ function PageHeading({ title, subtitle, actions }: {title: string; subtitle: str
 function Field({ label, children }: {label: string; children: React.ReactNode}) { return <label className="field"><span>{label}</span>{children}</label>; }
 function Stat({ label, value, icon: Icon, helper }: {label: string; value: string; icon: typeof Home; helper?: string}) { return <div className="stat-card"><div className="stat-top"><span>{label}</span><div className="stat-icon"><Icon size={17}/></div></div><strong>{value}</strong><span className="stat-helper">{helper ?? "较上次更新 —"}</span></div>; }
 function Dashboard({ tasks, go }: {tasks: Task[]; go: (page: Page) => void}) {
-  return <section className="page-stack"><PageHeading title="工作台" subtitle="微博管理任务概览，快速进入常用功能。" actions={<span className="date-chip"><Clock3 size={15}/> 本地工作区</span>}/><div className="stats-grid four"><Stat label="已连接账号" value="0" icon={Users} helper="完成登录后显示"/><Stat label="下载任务" value={String(tasks.filter(t => t.kind === "下载").length)} icon={CloudDownload} helper="包含历史模拟任务"/><Stat label="删除任务" value={String(tasks.filter(t => t.kind === "删除").length)} icon={Trash2} helper="真实删除尚未启用"/><Stat label="已下载媒体" value="126" icon={FileImage} helper="模拟统计数据"/></div><div className="dashboard-columns"><div className="panel"><div className="panel-title"><div><strong>最近任务</strong><span>查看下载与删除的最新进展</span></div><button className="text-button" onClick={() => go("tasks")}>全部任务 <ArrowRight size={14}/></button></div><div className="recent-list">{tasks.slice(0, 3).map(task => <div className="recent-row" key={task.id}><div className={task.kind === "下载" ? "recent-icon blue-bg" : "recent-icon amber-bg"}>{task.kind === "下载" ? <CloudDownload size={17}/> : <Trash2 size={17}/>}</div><div className="recent-info"><strong>{task.title}</strong><span>{task.detail}</span></div><TaskBadge state={task.state}/></div>)}</div></div><div className="panel quick-panel"><div className="panel-title"><div><strong>快捷操作</strong><span>开始常用工作流</span></div></div><button className="quick-action" onClick={() => go("download")}><div className="quick-icon blue-bg"><CloudDownload size={18}/></div><div><strong>下载媒体</strong><span>按用户备份图片和视频</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("delete")}><div className="quick-icon amber-bg"><Trash2 size={18}/></div><div><strong>整理微博</strong><span>筛选并预览待删除内容</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("accounts")}><div className="quick-icon green-bg"><Users size={18}/></div><div><strong>管理账号</strong><span>准备账号登录方式</span></div><ArrowRight size={16}/></button></div></div></section>;
+  return <section className="page-stack"><PageHeading title="工作台" subtitle="微博管理任务概览，快速进入常用功能。" /><div className="stats-grid four"><Stat label="下载任务" value={String(tasks.filter(t => t.kind === "下载").length)} icon={CloudDownload} helper="包含历史模拟任务"/><Stat label="删除任务" value={String(tasks.filter(t => t.kind === "删除").length)} icon={Trash2} helper="真实删除尚未启用"/><Stat label="已下载媒体" value="126" icon={FileImage} helper="模拟统计数据"/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp} helper="当前失败任务数量"/></div><div className="dashboard-columns"><div className="panel"><div className="panel-title"><div><strong>最近任务</strong><span>查看下载与删除的最新进展</span></div><button className="text-button" onClick={() => go("tasks")}>全部任务 <ArrowRight size={14}/></button></div><div className="recent-list">{tasks.slice(0, 3).map(task => <div className="recent-row" key={task.id}><div className={task.kind === "下载" ? "recent-icon blue-bg" : "recent-icon amber-bg"}>{task.kind === "下载" ? <CloudDownload size={17}/> : <Trash2 size={17}/>}</div><div className="recent-info"><strong>{task.title}</strong><span>{task.detail}</span></div><TaskBadge state={task.state}/></div>)}</div></div><div className="panel quick-panel"><div className="panel-title"><div><strong>快捷操作</strong><span>开始常用工作流</span></div></div><button className="quick-action" onClick={() => go("download")}><div className="quick-icon blue-bg"><CloudDownload size={18}/></div><div><strong>下载媒体</strong><span>按用户备份图片和视频</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("delete")}><div className="quick-icon amber-bg"><Trash2 size={18}/></div><div><strong>整理微博</strong><span>筛选并预览待删除内容</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("accounts")}><div className="quick-icon green-bg"><LockKeyhole size={18}/></div><div><strong>Cookie 管理</strong><span>扫码登录或导入 Cookie</span></div><ArrowRight size={16}/></button></div></div></section>;
 }
 type WeiboAccount = { uid: string; screenName: string; avatarUrl?: string | null };
 
@@ -331,7 +331,7 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
   return <div className="page-stack">
     <div className="panel account-panel">
       <div className="panel-title">
-        <div><strong>{account ? "Cookie 已获取" : "获取微博 Cookie"}</strong><span>扫码登录或导入 Cookie；{cookieStorageNote}</span></div>
+        <div><strong>{account ? "Cookie 已保存" : "保存 Cookie"}</strong><span>扫码登录或导入 Cookie</span></div>
         <span className={`tag ${account ? "green" : "neutral"}`}>{account ? "已保存" : "未获取"}</span>
       </div>
       {account && <div className="connected-account">
