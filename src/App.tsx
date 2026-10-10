@@ -122,8 +122,10 @@ function App() {
   };
   const searchDeletePosts = async () => {
     if (postsLoading) return;
+    const now = new Date();
+    const effectiveEndDate = dateTo || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     setAppliedDateFrom(dateFrom);
-    setAppliedDateTo(dateTo);
+    setAppliedDateTo(effectiveEndDate);
     setAppliedKeyword(keyword.trim());
     setAppliedPostType(postType);
     await loadDeletePosts(dateFrom);
