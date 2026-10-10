@@ -86,3 +86,45 @@ pub fn save_window_size(app: &AppHandle, width: f64, height: f64) {
 pub fn get_config_file_names() -> ConfigFileNames {
     ConfigFileNames { cookie_file: COOKIE_FILE_NAME.to_string(), window_size_file: WINDOW_SIZE_FILE_NAME.to_string() }
 }
+
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestIntervalConfig {
+    pub mode: String,
+    pub fixed_ms: u64,
+    pub min_ms: u64,
+    pub max_ms: u64,
+}
+impl Default for RequestIntervalConfig {
+    fn default() -> Self { Self { mode: "fixed".into(), fixed_ms: 1200, min_ms: 1000, max_ms: 2000 } }
+}
+fn request_interval_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(config_dir(app)?.join("request-interval.json"))
+}
+#[tauri::command]
+pub fn get_request_interval(app: AppHandle) -> RequestIntervalConfig {
+    let Ok(path) = request_interval_path(&app) else { return RequestIntervalConfig::default(); };
+    read_json(&path)
+}
+#[tauri::command]
+pub fn save_request_interval(app: AppHandle, mut config: RequestIntervalConfig) -> Result<RequestIntervalConfig, String> {
+    config.fixed_ms = config.fixed_ms.clamp(500, 30000);
+    config.min_ms = config.min_ms.clamp(500, 30000);
+    config.max_ms = config.max_ms.clamp(config.min_ms, 60000);
+    if config.mode != "random" { config.mode = "fixed".into(); }
+    let path = request_interval_path(&app)?;
+    write_json(&path, &config)?;
+    Ok(config)
+}
+/// 供列表读取、下载及其他网络模块复用的统一请求间隔。
+pub fn request_delay_ms(app: &AppHandle) -> u64 {
+    let config = get_request_interval(app.clone());
+    if config.mode != "random" { return config.fixed_ms; }
+    let min = config.min_ms;
+    let span = config.max_ms.saturating_sub(min);
+    if span == 0 { return min; }
+    let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default().as_nanos() as u64;
+    min + seed % (span + 1)
+}
