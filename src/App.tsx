@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Activity, Archive, ArrowDownToLine, ArrowRight, Check, ChevronDown, CircleHelp,
-  Clock3, CloudDownload, FileImage, FolderOpen, Gauge, Home, Image, ListTodo,
+  Activity, Archive, ArrowDownToLine, ArrowRight, Check, ChevronDown, CircleHelp, Copy,
+  Clock3, CloudDownload, Eye, EyeOff, FileImage, FolderOpen, Gauge, Home, Image, ListTodo,
   LockKeyhole, Moon, MoreHorizontal, Play, Plus, RefreshCw, Search, Settings2,
   ShieldCheck, Sun, Trash2, Users, Video, X,
 } from "lucide-react";
@@ -174,8 +174,8 @@ function App() {
   };
   // 应用外壳固定视口尺寸，滚动仅交由右侧内容区处理。
   return <div className={dark ? "app-shell dark" : "app-shell"}>
-    <aside className="sidebar"><div className="brand"><div className="brand-mark"><img src="/weibo-logo.svg" alt="" /></div><div><strong>Weibo Manager</strong><span>微博管理工作台</span></div></div><div className="workspace-label">工作空间</div><nav>{["概览","微博管理","系统"].map(group => <div className="nav-group" key={group}><div className="nav-group-label">{group}</div>{nav.filter(item => item.group === group).map(item => { const Icon = item.icon; return <React.Fragment key={item.id}><button className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => { if (item.id === "settings") { if (page === "settings" && settingsExpanded) { setSettingsExpanded(false); } else { setPage("settings"); setSettingsExpanded(true); setSettingSection("general"); } } else { setPage(item.id); setSettingsExpanded(false); } }}><Icon size={17}/><span>{item.label}</span>{item.id === "tasks" && <span className="nav-count">{tasks.length}</span>}{item.id === "settings" && <ChevronDown size={14} className={settingsExpanded ? "nav-chevron expanded" : "nav-chevron"}/>}</button>{item.id === "settings" && page === "settings" && settingsExpanded && <div className="settings-subnav"><button className={settingSection === "general" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("general"); setSettingsExpanded(true); document.getElementById("settings-general")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><Settings2 size={14}/>常规设置</button><button className={settingSection === "filename" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("filename"); setSettingsExpanded(true); document.getElementById("settings-filename")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><FileImage size={14}/>文件命名</button><button className={settingSection === "security" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("security"); setSettingsExpanded(true); document.getElementById("settings-security")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><ShieldCheck size={14}/>安全与数据</button></div>}</React.Fragment>; })}</div>)}</nav><div className="sidebar-bottom"><div className="connection"><span className="connection-dot"/><div><strong>模拟模式</strong><span>尚未连接微博</span></div></div><div className="version">WEIBO MANAGER <span>v0.1.0 · 阶段 1</span></div></div></aside>
-    <main className="main-area"><header className="topbar"><div className="breadcrumbs"><span>Weibo Manager</span><span className="crumb-slash">/</span><strong>{pageTitle}</strong></div><div className="topbar-actions"><span className="mode-pill"><span/>模拟数据</span><button className="icon-button" title="帮助" onClick={() => notify("阶段 1 使用模拟数据，不会连接微博或执行真实操作。")}><CircleHelp size={18}/></button><button className="icon-button" title={dark ? "切换浅色" : "切换深色"} onClick={() => setDark(v => !v)}>{dark ? <Sun size={18}/> : <Moon size={18}/>}</button><div className="profile-chip"><div className="avatar small-avatar">W</div><div><strong>本地工作区</strong><span>未登录</span></div><ChevronDown size={14}/></div></div></header><div className="content">{renderPage()}</div><footer className="footer"><span>Weibo Manager · 阶段 1 界面预览</span><span>所有微博操作均为模拟数据</span></footer></main>
+    <aside className="sidebar"><div className="brand"><div className="brand-mark"><img src="/weibo-logo.svg" alt="" /></div><div><strong>Weibo Manager</strong><span>微博管理工作台</span></div></div><nav>{["概览","微博管理","系统"].map(group => <div className="nav-group" key={group}><div className="nav-group-label">{group}</div>{nav.filter(item => item.group === group).map(item => { const Icon = item.icon; return <React.Fragment key={item.id}><button className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => { if (item.id === "settings") { if (page === "settings" && settingsExpanded) { setSettingsExpanded(false); } else { setPage("settings"); setSettingsExpanded(true); setSettingSection("general"); } } else { setPage(item.id); setSettingsExpanded(false); } }}><Icon size={17}/><span>{item.label}</span>{item.id === "tasks" && <span className="nav-count">{tasks.length}</span>}{item.id === "settings" && <ChevronDown size={14} className={settingsExpanded ? "nav-chevron expanded" : "nav-chevron"}/>}</button>{item.id === "settings" && page === "settings" && settingsExpanded && <div className="settings-subnav"><button className={settingSection === "general" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("general"); setSettingsExpanded(true); document.getElementById("settings-general")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><Settings2 size={14}/>常规设置</button><button className={settingSection === "filename" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("filename"); setSettingsExpanded(true); document.getElementById("settings-filename")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><FileImage size={14}/>文件命名</button><button className={settingSection === "security" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("security"); setSettingsExpanded(true); document.getElementById("settings-security")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><ShieldCheck size={14}/>安全与数据</button></div>}</React.Fragment>; })}</div>)}</nav><div className="sidebar-bottom"><div className="version">WEIBO MANAGER <span>v0.1.0 · 阶段 1</span></div></div></aside>
+    <main className="main-area"><header className="topbar"><div className="breadcrumbs"><span>Weibo Manager</span><span className="crumb-slash">/</span><strong>{pageTitle}</strong></div></header><div className="content">{renderPage()}</div></main>
     {toast && <div className="toast"><Check size={17}/>{toast}</div>}
   </div>;
 }
@@ -192,16 +192,25 @@ type WeiboAccount = { uid: string; screenName: string; avatarUrl?: string | null
 function Accounts({ notify }: {notify: (message: string) => void}) {
   const [method, setMethod] = useState<"qr" | "cookie">("qr");
   const [cookie, setCookie] = useState("");
+  const [savedCookie, setSavedCookie] = useState("");
+  const [showCookie, setShowCookie] = useState(false);
   const [qrState, setQrState] = useState("尚未开始登录");
   const [account, setAccount] = useState<WeiboAccount | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // 启动时只读取后端返回的账号资料，不让认证 Cookie 进入前端状态或日志。
+  // 仅为用户提供显示/复制功能而读取已保存的 Cookie；不写入日志。
   useEffect(() => {
-    invoke<WeiboAccount | null>("get_weibo_account")
-      .then(setAccount)
-      .catch(() => setAccount(null));
+    Promise.all([
+      invoke<WeiboAccount | null>("get_weibo_account"),
+      invoke<string | null>("get_weibo_cookie"),
+    ]).then(([savedAccount, currentCookie]) => {
+      setAccount(savedAccount);
+      setSavedCookie(currentCookie ?? "");
+    }).catch(() => {
+      setAccount(null);
+      setSavedCookie("");
+    });
   }, []);
 
   // 登录窗口打开后自动轮询后端；后端只在验证成功时返回账号资料并关闭窗口。
@@ -214,6 +223,7 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
         const verified = await invoke<WeiboAccount | null>("check_qr_login");
         if (verified && !cancelled) {
           setAccount(verified);
+          setSavedCookie((await invoke<string | null>("get_weibo_cookie")) ?? "");
           setQrState("登录成功");
           setError("");
           return;
@@ -250,8 +260,9 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
     try {
       const verified = await invoke<WeiboAccount>("finish_qr_login");
       setAccount(verified);
+      setSavedCookie((await invoke<string | null>("get_weibo_cookie")) ?? "");
       setQrState("登录成功");
-      notify(`已连接微博账号：${verified.screenName}`);
+      notify("已获取并保存微博 Cookie。");
     } catch (reason) {
       setError(String(reason));
       setQrState("尚未验证成功，请确认扫码已完成");
@@ -270,8 +281,9 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
     try {
       const verified = await invoke<WeiboAccount>("import_weibo_cookie", { cookie: cookie.trim() });
       setAccount(verified);
+      setSavedCookie((await invoke<string | null>("get_weibo_cookie")) ?? "");
       setCookie("");
-      notify(`已验证并连接微博账号：${verified.screenName}`);
+      notify("Cookie 已保存。");
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -287,7 +299,9 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
       setAccount(null);
       setQrState("尚未开始登录");
       setCookie("");
-      notify("已退出微博账号。");
+      setSavedCookie("");
+      setShowCookie(false);
+      notify("已删除保存的 Cookie。");
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -295,15 +309,26 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
     }
   };
 
+  const copyCookie = async () => {
+    try {
+      await navigator.clipboard.writeText(savedCookie);
+      notify("Cookie 已复制。");
+    } catch {
+      setError("复制失败，请检查系统剪贴板权限。");
+    }
+  };
+
   return <div className="page-stack">
     <div className="panel account-panel">
       <div className="panel-title">
-        <div><strong>连接微博账号</strong><span>扫码登录或导入 Cookie；只有通过服务端验证后才会显示为已登录</span></div>
-        <span className={`tag ${account ? "green" : "neutral"}`}>{account ? "已登录" : "未登录"}</span>
+        <div><strong>Cookie 已获取</strong><span>扫码登录或导入 Cookie；Cookie 会明文保存在本地 Settings.json 中</span></div>
+        <span className={`tag ${account ? "green" : "neutral"}`}>{account ? "已保存" : "未获取"}</span>
       </div>
       {account && <div className="connected-account">
-        <div className="avatar">{account.screenName.slice(0, 1).toUpperCase()}</div>
-        <div className="user-info"><strong>{account.screenName}</strong><span>微博 UID：{account.uid}</span></div>
+        <div className="avatar"><LockKeyhole size={17}/></div>
+        <div className="user-info cookie-value"><strong>微博 Cookie</strong><span>{showCookie ? savedCookie : "••••••••••••••••"}</span></div>
+        <button className="icon-button" onClick={() => setShowCookie(value => !value)} title={showCookie ? "隐藏 Cookie" : "显示 Cookie"} aria-label={showCookie ? "隐藏 Cookie" : "显示 Cookie"} disabled={!savedCookie}>{showCookie ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
+        <button className="icon-button" onClick={copyCookie} disabled={!savedCookie} title="复制 Cookie" aria-label="复制 Cookie"><Copy size={17}/></button>
         <button className="button ghost" onClick={logout} disabled={busy}>退出登录</button>
       </div>}
       <div className="segmented">
@@ -319,22 +344,22 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
             <button className="button secondary" onClick={startQrLogin} disabled={busy}><RefreshCw size={15}/> 打开微博扫码登录</button>
             <button className="button primary" onClick={finishQrLogin} disabled={busy}>已登录，验证并获取 Cookie</button>
           </div>
-          <div className="security-note"><ShieldCheck size={16}/> Cookie 仅由 Rust 后端读取和使用，不返回前端，也不会写入普通日志。</div>
+          <div className="security-note"><ShieldCheck size={16}/> Cookie 会明文保存在本地 Settings.json，不会写入应用日志。</div>
         </div>
       </div> : <div className="cookie-import">
         <Field label="微博 Cookie"><textarea rows={5} placeholder="粘贴本人微博登录后的 Cookie 请求头内容" value={cookie} onChange={e => setCookie(e.target.value)} autoComplete="off" /></Field>
-        <div className="inline-note"><LockKeyhole size={16}/> Cookie 将由后端验证；验证成功后仅保存在当前应用进程内存中。</div>
-        <button className="button primary" onClick={importCookie} disabled={busy}>验证并连接账号</button>
+        <div className="inline-note"><LockKeyhole size={16}/> Cookie 会明文保存在本地 Settings.json，不会写入应用日志。</div>
+        <button className="button primary" onClick={importCookie} disabled={busy}>保存 Cookie</button>
       </div>}
       {error && <div className="auth-error" role="alert">{error}</div>}
     </div>
     <div className="panel">
-      <div className="panel-title"><div><strong>账号列表</strong><span>显示已经验证的真实微博账号</span></div></div>
+      <div className="panel-title"><div><strong>Cookie 状态</strong><span>本地保存的微博会话</span></div></div>
       {account ? <div className="connected-account">
-        <div className="avatar">{account.screenName.slice(0, 1).toUpperCase()}</div>
-        <div className="user-info"><strong>{account.screenName}</strong><span>UID：{account.uid} · 当前会话有效</span></div>
-        <span className="tag green">已连接</span>
-      </div> : <EmptyState title="尚未连接账号" description="使用扫码登录或导入 Cookie，并通过真实会话验证后即可连接账号。"/>}
+        <div className="avatar"><LockKeyhole size={17}/></div>
+        <div className="user-info"><strong>Cookie 已获取</strong><span>Cookie 已保存在本地 Settings.json 中</span></div>
+        <span className="tag green">已保存</span>
+      </div> : <EmptyState title="尚未获取 Cookie" description="使用扫码登录或导入 Cookie 后即可保存到本地。"/>}
     </div>
   </div>;
 }
