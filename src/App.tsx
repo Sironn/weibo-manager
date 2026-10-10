@@ -88,7 +88,6 @@ function App() {
   const previewFilename = buildFilename(filenameSettings.fileTemplate, previewValues);
   const previewFoldername = buildFolderName(filenameSettings.folderTemplate, previewValues);
   const selectedCount = posts.filter(post => postChecks[post.id]).length;
-  const selectedFilteredCount = filteredPosts.filter(post => postChecks[post.id]).length;
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
   const refreshDeleteTasks = async () => {
     try {
@@ -99,7 +98,7 @@ function App() {
   const loadDeletePosts = async () => {
     setPostsLoading(true); setPostsError("");
     try {
-      const result = await invoke<WeiboPost[]>("get_delete_posts");
+      const result = await invoke<WeiboPost[]>("get_delete_posts", { dateFrom });
       setPosts(result);
       setPostChecks(current => Object.fromEntries(Object.entries(current).filter(([id]) => result.some(post => post.id === id))));
     } catch (reason) { setPostsError(String(reason)); setPosts([]); setPostChecks({}); }
