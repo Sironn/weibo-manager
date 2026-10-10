@@ -147,8 +147,8 @@ pub async fn get_delete_posts(date_from: String, store: State<'_, SessionStore>)
         let reached_start = !date_from.trim().is_empty() && page_posts.iter().all(|post| post.date < date_from);
         posts.extend(page_posts);
         if posts.len() == before || reached_start { break; }
-        // 控制预览阶段的请求频率，避免快速连续翻页。
-        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(250))).await.ok();
+        // 降低连续翻页频率；延时只能降低请求密度，不能保证平台不会触发风控。
+        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(1200))).await.ok();
     }
     posts.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| b.id.cmp(&a.id)));
     posts.dedup_by(|a, b| a.id == b.id);
