@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::auth::SessionStore;
+use crate::logger::write_log;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,7 +155,8 @@ pub async fn get_delete_posts(
     app: AppHandle,
     store: State<'_, SessionStore>,
     control: State<'_, DeleteSearchControl>,
-) -> Result<Vec<WeiboPost>, String> {
+ ) -> Result<Vec<WeiboPost>, String> {
+    let _ = write_log(&app, "INFO", "delete", &format!("开始读取微博列表，起始日期：{}", if date_from.trim().is_empty() { "不限" } else { date_from.as_str() }));
     let mut posts = Vec::new();
     let mut seen = std::collections::HashSet::new();
     if !wait_for_search_resume(&control).await { return Ok(posts); }
@@ -186,6 +188,7 @@ pub async fn get_delete_posts(
         .or_else(|| config_json.pointer("/data/uid").and_then(Value::as_str).map(str::to_string))
         .filter(|v| !v.is_empty() && v != "0")
         .ok_or_else(|| "未能从当前 Cookie 识别微博 UID。请重新登录后再试；当前不会使用模拟数据。".to_string())?;
+    let _ = write_log(&app, "INFO", "delete", &format!("已识别微博 UID，开始分页读取（UID={}）", uid));
 
     for page in 1..=1000 {
         if !wait_for_search_resume(&control).await { return Ok(posts); }
@@ -224,11 +227,16 @@ pub async fn get_delete_posts(
         for post in page_posts {
             if seen.insert(post.id.clone()) {
                 posts.push(post.clone());
-                let _ = app.emit("delete-post-item", post);
+                if let Err(error) = app.emit("delete-post-item", post.clone()) {
+                    let _ = write_log(&app, "ERROR", "delete", &format!("逐条展示事件发送失败，微博 ID={}：{}", post.id, error));
+                } else {
+                    let _ = write_log(&app, "DEBUG", "delete", &format!("逐条展示事件已发送，微博 ID={}", post.id));
+                }
             }
         }
         if reached_start { break; }
     }
+    let _ = write_log(&app, "INFO", "delete", &format!("微博列表读取结束，共收集 {} 条微博", posts.len()));
     Ok(posts)
 }
 
