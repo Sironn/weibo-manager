@@ -192,7 +192,7 @@ pub async fn finish_qr_login(
     if let Some(window) = app.get_webview_window("weibo-login") {
         let _ = window.close();
     }
-    let _ = write_log(&app, "INFO", "auth", &format!("扫码登录完成，账号 UID={}", account.uid));
+    let _ = write_log(&app, "INFO", "auth", "扫码登录完成");
     Ok(account)
 }
 
@@ -220,7 +220,7 @@ pub async fn import_weibo_cookie(
         cookie,
         account: account.clone(),
     });
-    let _ = write_log(&app, "INFO", "auth", &format!("Cookie 已导入，账号 UID={}", account.uid));
+    let _ = write_log(&app, "INFO", "auth", "Cookie 已导入（未记录 Cookie 内容或账号标识）");
     Ok(account)
 }
 
