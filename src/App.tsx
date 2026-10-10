@@ -179,8 +179,8 @@ function App() {
     {toast && <div className="toast"><Check size={17}/>{toast}</div>}
   </div>;
 }
-function PageHeading({ title, subtitle, actions }: {title: string; subtitle: string; actions?: React.ReactNode}) {
-  return <div className="page-heading"><div><div className="eyebrow">WEIBO MANAGER</div><h1>{title}</h1><p>{subtitle}</p></div>{actions && <div>{actions}</div>}</div>;
+function PageHeading({ title, subtitle, actions }: {title: string; subtitle?: string; actions?: React.ReactNode}) {
+  return <div className="page-heading"><div><div className="eyebrow">WEIBO MANAGER</div><h1>{title}</h1>{subtitle ? <p>{subtitle}</p> : null}</div>{actions && <div>{actions}</div>}</div>;
 }
 function Field({ label, children }: {label: string; children: React.ReactNode}) { return <label className="field"><span>{label}</span>{children}</label>; }
 function Stat({ label, value, icon: Icon, helper }: {label: string; value: string; icon: typeof Home; helper?: string}) { return <div className="stat-card"><div className="stat-top"><span>{label}</span><div className="stat-icon"><Icon size={17}/></div></div><strong>{value}</strong>{helper ? <span className="stat-helper">{helper}</span> : null}</div>; }
