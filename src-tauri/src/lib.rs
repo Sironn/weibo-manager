@@ -51,6 +51,7 @@ pub fn run() {
             auth::logout_weibo,
             delete::get_delete_posts,
             delete::set_delete_search_paused,
+            delete::set_delete_search_cancelled,
             delete::create_delete_task,
             delete::get_delete_tasks,
             settings::get_config_file_names,
