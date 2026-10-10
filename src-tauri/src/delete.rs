@@ -97,7 +97,7 @@ fn parse_post(mblog: &Value) -> Option<WeiboPost> {
     let kind = if mblog.get("retweeted_status").is_some() { "转发" } else { "原创" }.to_string();
     let has_pics = mblog.get("pics").and_then(Value::as_array).map(|v| !v.is_empty()).unwrap_or(false);
     let page_type = mblog.get("page_info").and_then(|v| v.get("type")).and_then(Value::as_str).unwrap_or("");
-    let media = if has_pics { "图片" } else if page_type == "video" || mblog.get("video").is_some() { "视频" } else { "无媒体" }.to_string();
+    let media = (if has_pics { "图片" } else if page_type == "video" || mblog.get("video").is_some() { "视频" } else { "无媒体" }).to_string();
     Some(WeiboPost { id, date, created_at, kind, text: post_text(mblog), media })
 }
 
