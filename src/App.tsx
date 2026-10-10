@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { initializeLogger, log, updateLoggerEnabled } from "./lib/logger";
 import {
   Activity, Archive, ArrowDownToLine, ArrowRight, Check, ChevronDown, CircleHelp, Copy,
   CloudDownload, Eye, EyeOff, FileImage, FolderOpen, Gauge, Home, Image, ListTodo,
@@ -90,6 +91,7 @@ function App() {
   const [requestMinDelay, setRequestMinDelay] = useState("1000");
   const [requestMaxDelay, setRequestMaxDelay] = useState("2000");
   const [theme, setTheme] = useState("system");
+  const [loggingEnabled, setLoggingEnabled] = useState(false);
   const filteredPosts = useMemo(() => posts.filter(post =>
     post.text.toLowerCase().includes(appliedKeyword.trim().toLowerCase()) &&
     (!appliedDateFrom || post.date >= appliedDateFrom) && (!appliedDateTo || post.date <= appliedDateTo) &&
@@ -109,6 +111,7 @@ function App() {
   const loadDeletePosts = async (fromDate = appliedDateFrom) => {
     if (postsLoading) return;
     setPostsLoading(true); setPostsError(""); setPostsPaused(false); setPostsCancelling(false);
+    log("info", "delete", `开始搜索微博，起始日期：${fromDate || "不限"}`);
     setPosts([]); setPostChecks({});
     try {
       await invoke("set_delete_search_cancelled", { cancelled: false });
@@ -121,7 +124,9 @@ function App() {
         result.forEach(post => merged.set(post.id, post));
         return [...merged.values()];
       });
+      log("info", "delete", `微博搜索完成，后端返回 ${result.length} 条结果`);
     } catch (reason) {
+      log("error", "delete", `微博搜索失败：${String(reason)}`);
       setPostsError(String(reason));
     } finally {
       setPostsLoading(false);
@@ -167,11 +172,28 @@ function App() {
   };
   useEffect(() => { void refreshDeleteTasks(); }, []);
   useEffect(() => {
+    void initializeLogger().then(setLoggingEnabled);
+  }, []);
+  useEffect(() => { log("info", "navigation", `切换页面：${page}`); }, [page]);
+  const toggleLogging = async (enabled: boolean) => {
+    try {
+      const saved = await updateLoggerEnabled(enabled);
+      setLoggingEnabled(saved);
+      notify(saved ? "日志记录已开启。" : "日志记录已关闭。");
+    } catch (reason) {
+      notify(`更新日志设置失败：${String(reason)}`);
+    }
+  };
+  const openLogFolder = async () => {
+    try { await invoke("open_log_folder"); }
+    catch (reason) { notify(`打开日志文件夹失败：${String(reason)}`); }
+  };
+  useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listen<WeiboPost>("delete-post-item", event => {
       const post = event.payload;
       setPosts(current => current.some(item => item.id === post.id) ? current : [...current, post]);
-    }).then(stop => { unlisten = stop; });
+    }).then(stop => { unlisten = stop; log("info", "delete", "微博逐条展示事件监听器已注册"); }).catch(reason => { log("error", "delete", `微博逐条展示事件监听器注册失败：${String(reason)}`); });
     return () => { unlisten?.(); };
   }, []);
   useEffect(() => {
@@ -239,6 +261,8 @@ function App() {
           <Field label="主题"><select value={theme} onChange={e => { setTheme(e.target.value); setDark(e.target.value === "dark"); }}><option value="system">跟随系统（当前预览为浅色）</option><option value="light">浅色</option><option value="dark">深色</option></select></Field>
           <div className="setting-row"><div><strong>任务并发数</strong><span>同时处理的任务数量</span></div><select value={concurrency} onChange={e => setConcurrency(e.target.value)}><option value="1">1 个</option><option value="2">2 个</option><option value="3">3 个</option><option value="5">5 个</option></select></div>
           <div className="setting-row request-interval-row"><div><strong>请求间隔</strong><span>统一配置网络请求的等待间隔</span></div><div className="request-interval-controls"><select aria-label="请求间隔模式" value={requestIntervalMode} onChange={e => { const mode = e.target.value as "fixed" | "random"; setRequestIntervalMode(mode); void saveRequestInterval({ mode, fixedMs: Number(requestDelay), minMs: Number(requestMinDelay), maxMs: Number(requestMaxDelay) }); }}><option value="fixed">固定间隔</option><option value="random">随机范围</option></select>{requestIntervalMode === "fixed" ? <select aria-label="固定请求间隔" value={requestDelay} onChange={e => { setRequestDelay(e.target.value); void saveRequestInterval({ mode: "fixed", fixedMs: Number(e.target.value), minMs: Number(requestMinDelay), maxMs: Number(requestMaxDelay) }); }}><option value="800">800 毫秒</option><option value="1200">1200 毫秒</option><option value="2000">2000 毫秒</option><option value="3000">3000 毫秒</option><option value="5000">5000 毫秒</option></select> : <div className="request-range"><label>最短 <input type="number" min="500" max="30000" step="100" value={requestMinDelay} onChange={e => setRequestMinDelay(e.target.value)} onBlur={() => { const min = Math.max(500, Number(requestMinDelay) || 500); const max = Math.max(min, Number(requestMaxDelay) || min); void saveRequestInterval({ mode: "random", fixedMs: Number(requestDelay), minMs: min, maxMs: max }); }} /> ms</label><label>最长 <input type="number" min="500" max="60000" step="100" value={requestMaxDelay} onChange={e => setRequestMaxDelay(e.target.value)} onBlur={() => { const min = Math.max(500, Number(requestMinDelay) || 500); const max = Math.max(min, Number(requestMaxDelay) || min); void saveRequestInterval({ mode: "random", fixedMs: Number(requestDelay), minMs: min, maxMs: max }); }} /> ms</label></div>}</div></div>
+          <div className="setting-row"><div><strong>运行日志</strong><span>记录前后端关键操作与错误，关闭后停止写入</span></div><label className="log-toggle"><input type="checkbox" checked={loggingEnabled} onChange={e => { void toggleLogging(e.target.checked); }} /><span>{loggingEnabled ? "已开启" : "已关闭"}</span></label></div>
+          <div className="setting-row"><div><strong>日志文件夹</strong><span>查看已保存的运行日志文件</span></div><button className="button secondary" onClick={() => { void openLogFolder(); }}><FolderOpen size={15}/> 打开日志文件夹</button></div>
         </section>
         <section className="panel settings-section" id="settings-filename">
           <div className="panel-title"><div><strong>文件与文件夹命名</strong><span>直接编辑占位符模板；点击变量可插入到当前选中的模板输入框</span></div><span className="tag blue">模板化</span></div>
