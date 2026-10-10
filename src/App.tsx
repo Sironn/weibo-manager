@@ -107,7 +107,7 @@ function App() {
     if (page === "dashboard") return <Dashboard tasks={tasks} go={setPage} />;
     if (page === "accounts") return <Accounts notify={notify} />;
     if (page === "delete") return <section className="page-stack">
-      <PageHeading title="微博删除" subtitle="先筛选并预览待处理微博。当前使用模拟数据，不会执行真实删除。" />
+      <PageHeading title="微博删除" />
       <div className="panel filter-panel">
         <div className="panel-title"><div><strong>筛选条件</strong><span>设置条件后查看匹配结果</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom("2023-01-01"); setDateTo("2024-12-31"); }}>重置</button></div>
         <div className="filter-grid"><Field label="开始日期"><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field><Field label="结束日期"><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
@@ -120,19 +120,19 @@ function App() {
       {showDeleteConfirm && <div className="modal-backdrop"><div className="modal"><div className="modal-icon warning"><Trash2/></div><h3>确认删除预览</h3><p>当前选择了 {selectedCount} 条模拟微博。真实删除模块尚未启用，此操作不会删除任何微博。</p><div className="warning-box">微博删除不可恢复。正式版本将在此处要求二次确认。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteConfirm(false)}>返回检查</button><button className="button danger" onClick={() => { setShowDeleteConfirm(false); notify("模拟预览完成：未发送任何删除请求。"); }}>确认模拟流程</button></div></div></div>}
     </section>;
     if (page === "download") return <section className="page-stack">
-      <PageHeading title="媒体下载" subtitle="按用户与时间范围组织媒体采集任务。当前为模拟流程。" actions={<button className="button primary" onClick={() => startMockTask(`采集 ${users.length} 个用户的媒体`, "下载")}><Plus size={16}/> 创建下载任务</button>} />
+      <PageHeading title="媒体下载" />
       <div className="panel download-user-panel">
         <div className="panel-title"><div><strong>目标用户队列</strong><span>支持添加多个用户并排队</span></div><span className="tag blue">{users.length} 个用户</span></div>
         <div className="add-user-row"><div className="input-icon"><Users size={16}/><input placeholder="微博主页链接或用户标识" value={newUser} onChange={e => setNewUser(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newUser.trim()) { setUsers(u => [...u, newUser.trim()]); setNewUser(""); } }} /></div><button className="button secondary" onClick={() => { if (newUser.trim()) { setUsers(u => [...u, newUser.trim()]); setNewUser(""); } }}><Plus size={15}/> 添加用户</button></div>
         <div className="user-list">{users.map((user, i) => <div className="user-row" key={user + i}><div className="avatar">{user.slice(0, 1).toUpperCase()}</div><div className="user-info"><strong>{user}</strong><span>待采集 · 模拟目标用户</span></div><span className="tag neutral">队列 {i + 1}</span><button className="icon-button" aria-label="移除用户" onClick={() => setUsers(u => u.filter((_, index) => index !== i))}><X size={16}/></button></div>)}</div>
         <div className="divider-line"/><div className="form-grid"><Field label="开始日期"><input type="date" defaultValue="2020-01-01"/></Field><Field label="结束日期"><input type="date" defaultValue="2024-12-31"/></Field><Field label="媒体类型"><select defaultValue="all"><option value="all">图片、视频、LivePhoto</option><option>仅图片</option><option>仅视频</option><option>仅 LivePhoto</option></select></Field><Field label="下载目录"><div className="input-with-button"><input value={downloadPath} onChange={e => setDownloadPath(e.target.value)}/><button className="icon-button" onClick={() => notify("目录选择器将在桌面运行环境接入。")} aria-label="选择目录"><FolderOpen size={16}/></button></div></Field></div>
       </div>
-      <div className="stats-grid three"><Stat label="待处理用户" value={String(users.length)} icon={Users}/><Stat label="发现媒体" value="—" icon={Image} helper="等待真实采集模块"/><Stat label="下载完成" value="—" icon={Check} helper="当前为模拟数据"/></div>
+      <div className="stats-grid three"><Stat label="待处理用户" value={String(users.length)} icon={Users}/><Stat label="发现媒体" value="—" icon={Image} /><Stat label="下载完成" value="—" icon={Check} /></div>
     </section>;
-    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" subtitle="集中查看下载与删除任务、执行进度和结果。" actions={<button className="button secondary" onClick={() => notify("当前展示的是本地模拟任务。")}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel"><div className="panel-title"><div><strong>所有任务</strong><span>模拟任务状态可用于验收界面交互</span></div><button className="button ghost" onClick={() => setTasks([])}>清空模拟列表</button></div><div className="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>操作</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><strong>{task.title}</strong><small>任务 #{task.id}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.detail}</td><td><button className="icon-button" aria-label="查看任务详情" onClick={() => notify(`${task.title}：${task.detail}`)}><MoreHorizontal size={17}/></button></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建下载或删除模拟任务后会显示在这里。" />}</div></div></section>;
+    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" actions={<button className="button secondary" onClick={() => notify("当前展示的是本地模拟任务。")}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel"><div className="panel-title"><div><strong>所有任务</strong></div><button className="button ghost" onClick={() => setTasks([])}>清空模拟列表</button></div><div className="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>操作</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><strong>{task.title}</strong><small>任务 #{task.id}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.detail}</td><td><button className="icon-button" aria-label="查看任务详情" onClick={() => notify(`${task.title}：${task.detail}`)}><MoreHorizontal size={17}/></button></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建下载或删除模拟任务后会显示在这里。" />}</div></div></section>;
     // 设置页面由右侧分区承载；左侧菜单负责切换并定位到对应分区。
     if (page === "settings") return <section className="page-stack settings-page">
-      <PageHeading title="设置" subtitle="管理应用常规行为、下载命名规则与本地数据选项。" />
+      <PageHeading title="设置" />
       <div className="settings-main">
         <section className="panel settings-section" id="settings-general">
           <div className="panel-title"><div><strong>常规设置</strong><span>个性化应用显示与任务行为</span></div></div>
@@ -149,7 +149,7 @@ function App() {
             <Field label="下载文件名模板">
               <input value={filenameSettings.fileTemplate} onFocus={() => setTemplateTarget("file")} onChange={e => saveFilenameSettings({...filenameSettings, fileTemplate: e.target.value})} placeholder="%USER_SCREEN_NAME% [%POST_TIME%] %POST_ID%_%MEDIA_INDEX%%EXT%" />
             </Field>
-            <p className="template-help">示例：%USER_SCREEN_NAME% [%POST_TIME%] %POST_ID%_%MEDIA_INDEX%%EXT%</p>
+            <p className="template-help">文件夹示例：{previewFoldername}</p><p className="template-help">文件名示例：{previewFilename}</p><p className="template-help">发布时间格式示例：2024-08-18 14:30:00</p>
           </div>
           <div className="variable-picker">
             <div className="variable-picker-heading"><strong>可用变量</strong><span>当前插入目标：{templateTarget === "file" ? "文件名模板" : "文件夹模板"}</span></div>
@@ -183,9 +183,9 @@ function PageHeading({ title, subtitle, actions }: {title: string; subtitle: str
   return <div className="page-heading"><div><div className="eyebrow">WEIBO MANAGER</div><h1>{title}</h1><p>{subtitle}</p></div>{actions && <div>{actions}</div>}</div>;
 }
 function Field({ label, children }: {label: string; children: React.ReactNode}) { return <label className="field"><span>{label}</span>{children}</label>; }
-function Stat({ label, value, icon: Icon, helper }: {label: string; value: string; icon: typeof Home; helper?: string}) { return <div className="stat-card"><div className="stat-top"><span>{label}</span><div className="stat-icon"><Icon size={17}/></div></div><strong>{value}</strong><span className="stat-helper">{helper ?? "较上次更新 —"}</span></div>; }
+function Stat({ label, value, icon: Icon, helper }: {label: string; value: string; icon: typeof Home; helper?: string}) { return <div className="stat-card"><div className="stat-top"><span>{label}</span><div className="stat-icon"><Icon size={17}/></div></div><strong>{value}</strong>{helper ? <span className="stat-helper">{helper}</span> : null}</div>; }
 function Dashboard({ tasks, go }: {tasks: Task[]; go: (page: Page) => void}) {
-  return <section className="page-stack"><PageHeading title="工作台" subtitle="微博管理任务概览，快速进入常用功能。" /><div className="stats-grid four"><Stat label="下载任务" value={String(tasks.filter(t => t.kind === "下载").length)} icon={CloudDownload} helper="包含历史模拟任务"/><Stat label="删除任务" value={String(tasks.filter(t => t.kind === "删除").length)} icon={Trash2} helper="真实删除尚未启用"/><Stat label="已下载媒体" value="126" icon={FileImage} helper="模拟统计数据"/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp} helper="当前失败任务数量"/></div><div className="dashboard-columns"><div className="panel"><div className="panel-title"><div><strong>最近任务</strong><span>查看下载与删除的最新进展</span></div><button className="text-button" onClick={() => go("tasks")}>全部任务 <ArrowRight size={14}/></button></div><div className="recent-list">{tasks.slice(0, 3).map(task => <div className="recent-row" key={task.id}><div className={task.kind === "下载" ? "recent-icon blue-bg" : "recent-icon amber-bg"}>{task.kind === "下载" ? <CloudDownload size={17}/> : <Trash2 size={17}/>}</div><div className="recent-info"><strong>{task.title}</strong><span>{task.detail}</span></div><TaskBadge state={task.state}/></div>)}</div></div><div className="panel quick-panel"><div className="panel-title"><div><strong>快捷操作</strong><span>开始常用工作流</span></div></div><button className="quick-action" onClick={() => go("download")}><div className="quick-icon blue-bg"><CloudDownload size={18}/></div><div><strong>下载媒体</strong><span>按用户备份图片和视频</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("delete")}><div className="quick-icon amber-bg"><Trash2 size={18}/></div><div><strong>整理微博</strong><span>筛选并预览待删除内容</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("accounts")}><div className="quick-icon green-bg"><LockKeyhole size={18}/></div><div><strong>Cookie 管理</strong><span>扫码登录或导入 Cookie</span></div><ArrowRight size={16}/></button></div></div></section>;
+  return <section className="page-stack"><PageHeading title="工作台" /><div className="stats-grid four"><Stat label="下载任务" value={String(tasks.filter(t => t.kind === "下载").length)} icon={CloudDownload} /><Stat label="删除任务" value={String(tasks.filter(t => t.kind === "删除").length)} icon={Trash2} /><Stat label="已下载媒体" value="126" icon={FileImage} /><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp} /></div><div className="dashboard-columns"><div className="panel"><div className="panel-title"><div><strong>最近任务</strong></div><button className="text-button" onClick={() => go("tasks")}>全部任务 <ArrowRight size={14}/></button></div><div className="recent-list">{tasks.slice(0, 3).map(task => <div className="recent-row" key={task.id}><div className={task.kind === "下载" ? "recent-icon blue-bg" : "recent-icon amber-bg"}>{task.kind === "下载" ? <CloudDownload size={17}/> : <Trash2 size={17}/>}</div><div className="recent-info"><strong>{task.title}</strong><span>{task.detail}</span></div><TaskBadge state={task.state}/></div>)}</div></div><div className="panel quick-panel"><div className="panel-title"><div><strong>快捷操作</strong></div></div><button className="quick-action" onClick={() => go("download")}><div className="quick-icon blue-bg"><CloudDownload size={18}/></div><div><strong>下载媒体</strong><span>按用户备份图片和视频</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("delete")}><div className="quick-icon amber-bg"><Trash2 size={18}/></div><div><strong>整理微博</strong><span>筛选并预览待删除内容</span></div><ArrowRight size={16}/></button><button className="quick-action" onClick={() => go("accounts")}><div className="quick-icon green-bg"><LockKeyhole size={18}/></div><div><strong>Cookie 管理</strong><span>扫码登录或导入 Cookie</span></div><ArrowRight size={16}/></button></div></div></section>;
 }
 type WeiboAccount = { uid: string; screenName: string; avatarUrl?: string | null };
 
@@ -196,7 +196,7 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
   const [showCookie, setShowCookie] = useState(false);
   const [showQrDialog, setShowQrDialog] = useState(false);
   const [configFileNames, setConfigFileNames] = useState<{ cookieFile: string; windowSizeFile: string } | null>(null);
-  const [qrState, setQrState] = useState("尚未开始登录");
+  const [qrState, setQrState] = useState("获取Cookie");
   const [account, setAccount] = useState<WeiboAccount | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -228,7 +228,7 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
         if (!isOpen && !cancelled && !busy) {
           setShowQrDialog(false);
           setError("");
-          if (!savedCookie) setQrState("尚未开始登录");
+          if (!savedCookie) setQrState("获取Cookie");
           return;
         }
       } catch { /* 窗口状态检查失败时不自动改变登录状态。 */ }
@@ -274,7 +274,7 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
   const closeQrDialog = async () => {
     try { await invoke("close_qr_login_window"); }
     catch (reason) { setError(String(reason)); }
-    finally { setShowQrDialog(false); setError(""); if (!savedCookie) setQrState("尚未开始登录"); }
+    finally { setShowQrDialog(false); setError(""); if (!savedCookie) setQrState("获取Cookie"); }
   };
 
   const importCookie = async () => {
@@ -303,7 +303,7 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
     try {
       await invoke("logout_weibo");
       setAccount(null);
-      setQrState("尚未开始登录");
+      setQrState("获取Cookie");
       setCookie("");
       setSavedCookie("");
       setShowCookie(false);
