@@ -7,6 +7,7 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
+use crate::logger::write_log;
 use tauri::{
     webview::WebviewWindowBuilder,
     AppHandle, Manager, State, WebviewUrl, WebviewWindow,
@@ -65,6 +66,7 @@ fn persist_cookie(app: &AppHandle, cookie: Option<&str>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn start_qr_login(app: AppHandle) -> Result<(), String> {
+    let _ = write_log(&app, "INFO", "auth", "用户请求打开微博扫码登录窗口");
     // 窗口创建和 WebView 初始化可能触发平台级同步操作。
     // 将命令声明为 async，避免在前端 invoke 的同步调用路径中阻塞主界面事件处理。
     if let Some(window) = app.get_webview_window("weibo-login") {
@@ -82,6 +84,7 @@ pub async fn start_qr_login(app: AppHandle) -> Result<(), String> {
         .center()
         .build()
         .map_err(|error| format!("无法打开微博登录窗口：{error}"))?;
+    let _ = write_log(&app, "INFO", "auth", "微博扫码登录窗口已打开");
     Ok(())
 }
 
@@ -162,7 +165,8 @@ pub async fn close_qr_login_window(app: AppHandle) -> Result<(), String> {
 pub async fn finish_qr_login(
     app: AppHandle,
     store: State<'_, SessionStore>,
-) -> Result<WeiboAccount, String> {
+ ) -> Result<WeiboAccount, String> {
+    let _ = write_log(&app, "INFO", "auth", "开始验证扫码登录状态");
     let login_window = app
         .get_webview_window("weibo-login")
         .ok_or_else(|| "请先点击“打开微博扫码登录”，再完成扫码。".to_string())?;
@@ -188,6 +192,7 @@ pub async fn finish_qr_login(
     if let Some(window) = app.get_webview_window("weibo-login") {
         let _ = window.close();
     }
+    let _ = write_log(&app, "INFO", "auth", &format!("扫码登录完成，账号 UID={}", account.uid));
     Ok(account)
 }
 
@@ -196,7 +201,8 @@ pub async fn import_weibo_cookie(
     app: AppHandle,
     cookie: String,
     store: State<'_, SessionStore>,
-) -> Result<WeiboAccount, String> {
+ ) -> Result<WeiboAccount, String> {
+    let _ = write_log(&app, "INFO", "auth", "用户提交 Cookie 导入（不记录 Cookie 内容）");
     let cookie = cookie.trim().to_owned();
     if cookie.is_empty() {
         return Err("Cookie 不能为空。".into());
@@ -214,6 +220,7 @@ pub async fn import_weibo_cookie(
         cookie,
         account: account.clone(),
     });
+    let _ = write_log(&app, "INFO", "auth", &format!("Cookie 已导入，账号 UID={}", account.uid));
     Ok(account)
 }
 
@@ -236,6 +243,7 @@ pub fn logout_weibo(
     app: AppHandle,
     store: State<'_, SessionStore>,
 ) -> Result<(), String> {
+    let _ = write_log(&app, "INFO", "auth", "用户退出微博账号");
     persist_cookie(&app, None)?;
     let mut current = store.0.lock().map_err(|_| "清理认证状态失败，请重启应用后重试。".to_string())?;
     *current = None;
