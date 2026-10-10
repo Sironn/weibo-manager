@@ -1,5 +1,6 @@
 mod auth;
 mod delete;
+mod logger;
 mod settings;
 
 use rusqlite::Connection;
@@ -55,6 +56,10 @@ pub fn run() {
             delete::create_delete_task,
             delete::get_delete_tasks,
             settings::get_config_file_names,
+            logger::get_logging_enabled,
+            logger::set_logging_enabled,
+            logger::log_message,
+            logger::open_log_folder,
             settings::get_request_interval,
             settings::save_request_interval,
         ])
