@@ -56,11 +56,11 @@ function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [dark, setDark] = useState(false);
   const [query, setQuery] = useState("");
-  const [dateFrom, setDateFrom] = useState("2023-01-01");
-  const [dateTo, setDateTo] = useState("2024-12-31");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [keyword, setKeyword] = useState("");
-  const [appliedDateFrom, setAppliedDateFrom] = useState("2023-01-01");
-  const [appliedDateTo, setAppliedDateTo] = useState("2024-12-31");
+  const [appliedDateFrom, setAppliedDateFrom] = useState("");
+  const [appliedDateTo, setAppliedDateTo] = useState("");
   const [appliedKeyword, setAppliedKeyword] = useState("");
   const [posts, setPosts] = useState<WeiboPost[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
@@ -85,7 +85,7 @@ function App() {
   const [theme, setTheme] = useState("system");
   const filteredPosts = useMemo(() => posts.filter(post =>
     post.text.toLowerCase().includes(appliedKeyword.trim().toLowerCase()) &&
-    post.date >= appliedDateFrom && post.date <= appliedDateTo &&
+    (!appliedDateFrom || post.date >= appliedDateFrom) && (!appliedDateTo || post.date <= appliedDateTo) &&
     (appliedPostType === "全部类型" || post.kind === appliedPostType)), [posts, appliedKeyword, appliedDateFrom, appliedDateTo, appliedPostType]);
   // 预览值模拟真实下载时可从用户资料、微博元数据和媒体响应中读取的字段。
   const previewValues = { USER_SCREEN_NAME: "travel_diary", POST_TIME: "2024-08-18 14:30:00", POST_ID: "5078219042", MEDIA_INDEX: "01", EXT: ".jpg" };
@@ -141,7 +141,7 @@ function App() {
     if (page === "delete") return <section className="page-stack">
       <PageHeading title="微博删除" subtitle="读取当前登录账号的微博；创建任务仅保存待确认清单，不会执行删除。" />
       <div className="panel filter-panel">
-        <div className="panel-title"><div><strong>筛选条件</strong><span>设置日期、关键词和微博类型后，点击搜索应用筛选</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom("2023-01-01"); setDateTo("2024-12-31"); setPostType("全部类型"); }}>重置条件</button></div>
+        <div className="panel-title"><div><strong>筛选条件</strong><span>日期可留空以搜索全部时间；设置条件后点击搜索应用筛选</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom(""); setDateTo(""); setPostType("全部类型"); }}>重置条件</button></div>
         <div className="filter-grid"><Field label="开始日期"><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field><Field label="结束日期"><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select value={postType} onChange={e => setPostType(e.target.value)}><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
         <div className="filter-foot"><span><ShieldCheck size={15}/> 预览后确认 · 本阶段不会删除</span><div className="account-actions"><span>匹配 {filteredPosts.length} 条 · 已选 {selectedCount} 条</span><button className="button primary" onClick={() => void searchDeletePosts()} disabled={postsLoading}><Search size={15}/> 搜索微博</button></div></div>
       </div>
