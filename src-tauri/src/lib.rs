@@ -56,10 +56,13 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let RunEvent::WindowEvent { label, event: WindowEvent::Resized(size), .. } = event {
-            if let Some(window) = app_handle.get_webview_window(&label) {
-                let scale = window.scale_factor().unwrap_or(1.0);
-                let logical = size.to_logical::<f64>(scale);
-                settings::save_window_size(&app_handle, logical.width, logical.height);
+            // 只保存主窗口尺寸，避免微博扫码登录窗口覆盖主窗口设置。
+            if label == "main" {
+                if let Some(window) = app_handle.get_webview_window(&label) {
+                    let scale = window.scale_factor().unwrap_or(1.0);
+                    let logical = size.to_logical::<f64>(scale);
+                    settings::save_window_size(&app_handle, logical.width, logical.height);
+                }
             }
         }
     });
