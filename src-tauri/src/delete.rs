@@ -102,7 +102,7 @@ fn parse_post(mblog: &Value) -> Option<WeiboPost> {
 }
 
 #[tauri::command]
-pub async fn get_delete_posts(store: State<'_, SessionStore>) -> Result<Vec<WeiboPost>, String> {
+pub async fn get_delete_posts(date_from: String, store: State<'_, SessionStore>) -> Result<Vec<WeiboPost>, String> {
     let cookie = store.cookie()?;
     let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(25)).build()
         .map_err(|e| format!("初始化微博请求失败：{e}"))?;
@@ -121,7 +121,7 @@ pub async fn get_delete_posts(store: State<'_, SessionStore>) -> Result<Vec<Weib
         .ok_or_else(|| "未能从当前 Cookie 识别微博 UID。请重新登录后再试；当前不会使用模拟数据。".to_string())?;
 
     let mut posts = Vec::new();
-    for page in 1..=5 {
+    for page in 1..=100 {
         let url = format!("https://m.weibo.cn/api/container/getIndex?containerid=107603{uid}&page={page}");
         let response = client.get(&url).header(COOKIE, &cookie)
             .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
@@ -137,12 +137,18 @@ pub async fn get_delete_posts(store: State<'_, SessionStore>) -> Result<Vec<Weib
         let cards = body.pointer("/data/cards").and_then(Value::as_array)
             .ok_or_else(|| "微博列表接口没有返回预期数据；请确认登录状态有效。".to_string())?;
         let before = posts.len();
+        let mut page_posts = Vec::new();
         for card in cards {
             if let Some(mblog) = card.get("mblog") {
-                if let Some(post) = parse_post(mblog) { posts.push(post); }
+                if let Some(post) = parse_post(mblog) { page_posts.push(post); }
             }
         }
-        if posts.len() == before { break; }
+        if page_posts.is_empty() { break; }
+        let reached_start = page_posts.iter().all(|post| post.date < date_from);
+        posts.extend(page_posts);
+        if posts.len() == before || reached_start { break; }
+        // 控制预览阶段的请求频率，避免快速连续翻页。
+        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(250))).await.ok();
     }
     posts.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| b.id.cmp(&a.id)));
     posts.dedup_by(|a, b| a.id == b.id);
