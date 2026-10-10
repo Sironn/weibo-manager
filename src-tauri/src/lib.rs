@@ -1,4 +1,5 @@
 mod auth;
+mod settings;
 
 use rusqlite::Connection;
 use std::{fs, path::PathBuf};
@@ -8,38 +9,24 @@ fn app_data_file(app: &tauri::AppHandle, name: &str) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|dir| dir.join(name))
 }
 
-fn save_window_size(app: &tauri::AppHandle, width: f64, height: f64) {
-    if let Some(path) = app_data_file(app, "window-size.json") {
-        if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
-        if let Ok(json) = serde_json::to_vec(&serde_json::json!({
-            "width": width.clamp(980.0, 2400.0),
-            "height": height.clamp(640.0, 1800.0)
-        })) { let _ = fs::write(path, json); }
-    }
-}
 
 pub fn run() {
     let app = tauri::Builder::default()
         .setup(|app| {
-            // 认证会话只由 Rust 后端持有，避免把 Cookie 暴露给前端状态。
-            app.manage(auth::SessionStore::default());
+            let handle = app.handle().clone();
+            let saved_settings = settings::load_with_migration(&handle);
+            // 启动时从本地 Settings.json 恢复 Cookie；Cookie 不写入日志。
+            app.manage(auth::SessionStore::from_saved_cookie(saved_settings.cookie.clone()));
             let tray = tauri::tray::TrayIconBuilder::new()
                 .icon(app.default_window_icon().cloned().expect("default window icon missing"))
                 .build(app)?;
             app.manage(tray);
-            let handle = app.handle().clone();
-            if let Some(path) = app_data_file(&handle, "window-size.json") {
-                if let Ok(raw) = fs::read_to_string(path) {
-                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) {
-                        let width = value["width"].as_f64().unwrap_or(1280.0).clamp(980.0, 2400.0);
-                        let height = value["height"].as_f64().unwrap_or(820.0).clamp(640.0, 1800.0);
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }));
-                            // The size is restored, but the position is never persisted.
-                            let _ = window.center();
-                        }
-                    }
-                }
+            if let Some(window) = app.get_webview_window("main") {
+                let width = saved_settings.width.unwrap_or(1280.0).clamp(980.0, 2400.0);
+                let height = saved_settings.height.unwrap_or(820.0).clamp(640.0, 1800.0);
+                let _ = window.set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }));
+                // The size is restored, but the position is never persisted.
+                let _ = window.center();
             }
             if let Some(path) = app_data_file(&handle, "weibo-manager.sqlite3") {
                 if let Some(parent) = path.parent() { let _ = fs::create_dir_all(parent); }
@@ -61,6 +48,7 @@ pub fn run() {
             auth::check_qr_login,
             auth::import_weibo_cookie,
             auth::get_weibo_account,
+            auth::get_weibo_cookie,
             auth::logout_weibo,
         ])
         .build(tauri::generate_context!())
@@ -71,7 +59,7 @@ pub fn run() {
             if let Some(window) = app_handle.get_webview_window(&label) {
                 let scale = window.scale_factor().unwrap_or(1.0);
                 let logical = size.to_logical::<f64>(scale);
-                save_window_size(&app_handle, logical.width, logical.height);
+                settings::save_window_size(&app_handle, logical.width, logical.height);
             }
         }
     });
