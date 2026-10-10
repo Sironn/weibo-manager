@@ -42,6 +42,14 @@ impl Default for SessionStore {
 }
 
 impl SessionStore {
+    /// 为后端微博 API 提供会话 Cookie；Cookie 不会返回给前端任务对象或写入日志。
+    pub(crate) fn cookie(&self) -> Result<String, String> {
+        let current = self.0.lock().map_err(|_| "读取微博会话失败，请重启应用后重试。".to_string())?;
+        current.as_ref().map(|session| session.cookie.clone())
+            .filter(|cookie| !cookie.trim().is_empty())
+            .ok_or_else(|| "尚未登录微博，请先扫码登录或导入 Cookie。".to_string())
+    }
+
     pub fn from_saved_cookie(cookie: Option<String>) -> Self {
         let session = cookie.filter(|value| !value.trim().is_empty()).map(|cookie| ActiveSession {
             cookie,
