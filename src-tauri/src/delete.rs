@@ -144,7 +144,7 @@ pub async fn get_delete_posts(date_from: String, store: State<'_, SessionStore>)
             }
         }
         if page_posts.is_empty() { break; }
-        let reached_start = page_posts.iter().all(|post| post.date < date_from);
+        let reached_start = !date_from.trim().is_empty() && page_posts.iter().all(|post| post.date < date_from);
         posts.extend(page_posts);
         if posts.len() == before || reached_start { break; }
         // 控制预览阶段的请求频率，避免快速连续翻页。
@@ -168,8 +168,14 @@ pub fn create_delete_task(
     if post_ids.iter().any(|id| id.trim().is_empty()) { return Err("选中的微博 ID 无效，请刷新列表后重试。".into()); }
     let id = unix_millis();
     let created_at = format!("{id}");
-    let detail = format!("待确认 · {} 条微博 · 日期 {} 至 {} · 类型 {} · 关键词 {}",
-        post_ids.len(), date_from, date_to, post_type, if keyword.trim().is_empty() { "无" } else { keyword.trim() });
+    let date_label = match (date_from.trim().is_empty(), date_to.trim().is_empty()) {
+        (true, true) => "全部时间".to_string(),
+        (false, true) => format!("{} 起", date_from),
+        (true, false) => format!("截至 {}", date_to),
+        (false, false) => format!("{} 至 {}", date_from, date_to),
+    };
+    let detail = format!("待确认 · {} 条微博 · 日期 {} · 类型 {} · 关键词 {}",
+        post_ids.len(), date_label, post_type, if keyword.trim().is_empty() { "无" } else { keyword.trim() });
     let task = DeleteTask {
         id, title: format!("微博删除 · {} 条", post_ids.len()), kind: "删除".into(),
         state: "等待中".into(), progress: 0, detail, created_at: created_at.clone(),
