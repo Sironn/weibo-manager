@@ -14,11 +14,11 @@ use tauri::{
 use url::Url;
 
 const LOGIN_URL: &str = "https://passport.weibo.com/sso/signin?entry=miniblog&source=miniblog&url=https%3A%2F%2Fweibo.com%2F";
+// 扫码窗口先收集 weibo.com 登录流程使用的 Cookie，避免把 weibo.cn
+// 的同名 Cookie 合并进同一个请求头，覆盖真正用于 weibo.com 的值。
 const COOKIE_URLS: &[&str] = &[
     "https://weibo.com/",
     "https://passport.weibo.com/",
-    "https://m.weibo.cn/",
-    "https://weibo.cn/",
 ];
 const PROFILE_URL: &str = "https://weibo.com/ajax/setting/getBasicInfo";
 
@@ -189,8 +189,8 @@ pub async fn import_weibo_cookie(
     Ok(account)
 }
 
-/// 通过需要登录态的微博接口验证 Cookie，并从返回结果提取账号信息。
-/// 仅 HTTP 成功且响应包含有效用户 ID 时才视为登录成功。
+/// 通过与 Cookie 域名匹配的微博接口验证会话，并从实际响应中提取账号资料。
+/// 手动导入的 Cookie 不携带域名信息，因此依次尝试 weibo.com 与 m.weibo.cn。
 async fn validate_cookie(cookie: &str) -> Result<WeiboAccount, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -198,68 +198,103 @@ async fn validate_cookie(cookie: &str) -> Result<WeiboAccount, String> {
         .build()
         .map_err(|error| format!("无法初始化微博请求客户端：{error}"))?;
 
-    let response = client
-        .get(PROFILE_URL)
-        .header(reqwest::header::COOKIE, cookie)
-        .header(reqwest::header::REFERER, "https://weibo.com/")
-        .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
-        .send()
-        .await
-        .map_err(|_| "连接微博验证接口失败，请检查网络或代理设置。".to_string())?;
+    let endpoints = [
+        ("https://weibo.com/ajax/setting/getBasicInfo", "https://weibo.com/"),
+        ("https://m.weibo.cn/api/config", "https://m.weibo.cn/"),
+    ];
+    let mut last_error = "微博未确认登录身份。请确认 Cookie 来源域名与登录状态后重试。".to_string();
 
-    let status = response.status();
-    if !status.is_success() {
-        return Err(match status.as_u16() {
-            401 => "微博拒绝了当前会话（HTTP 401），Cookie 可能已过期，请重新登录。".to_string(),
-            403 => "微博验证请求被拒绝（HTTP 403），可能触发了安全限制；请稍后重试或在微博网页确认登录状态。".to_string(),
-            404 => "微博账号验证接口返回 HTTP 404，接口地址可能已调整；这不代表 Cookie 一定无效。".to_string(),
-            429 | 432 => format!("微博暂时限制了验证请求（HTTP {}），请稍后重试。", status.as_u16()),
-            _ => format!("微博验证接口返回 HTTP {}，请稍后重试。", status),
-        });
-    }
+    for (endpoint, referer) in endpoints {
+        let response = match client
+            .get(endpoint)
+            .header(reqwest::header::COOKIE, cookie)
+            .header(reqwest::header::REFERER, referer)
+            .header(reqwest::header::ACCEPT, "application/json, text/plain, */*")
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => {
+                last_error = "连接微博验证接口失败，请检查网络或代理设置。".to_string();
+                continue;
+            }
+        };
 
-    let body = response
-        .json::<Value>()
-        .await
-        .map_err(|_| "微博返回的数据无法识别，请确认网络未被拦截后重试。".to_string())?;
-    if body.get("ok").and_then(Value::as_i64).is_some_and(|ok| ok != 1) {
-        let message = body.get("msg").and_then(Value::as_str).unwrap_or("");
-        if message.contains("登录") || message.contains("未登录") || message.contains("登录状态") {
-            return Err("微博未确认当前登录状态，Cookie 可能已过期，请重新登录。".into());
+        let status = response.status();
+        if !status.is_success() {
+            last_error = match status.as_u16() {
+                401 => "微博拒绝了当前会话（HTTP 401），Cookie 可能已过期。".to_string(),
+                403 => "微博验证请求被拒绝（HTTP 403），可能触发了安全限制；请稍后重试。".to_string(),
+                404 => format!("微博验证接口返回 HTTP 404：{endpoint}"),
+                429 | 432 => format!("微博暂时限制了验证请求（HTTP {}），请稍后重试。", status.as_u16()),
+                _ => format!("微博验证接口返回 HTTP {}。", status.as_u16()),
+            };
+            continue;
         }
-        return Err(if message.is_empty() {
-            "微博未确认当前登录状态，请重新登录后重试。".into()
-        } else {
-            format!("微博验证未通过：{message}")
-        });
+
+        let body = match response.json::<Value>().await {
+            Ok(body) => body,
+            Err(_) => {
+                last_error = "微博返回的数据无法识别，请确认网络未被拦截后重试。".to_string();
+                continue;
+            }
+        };
+
+        if body.get("ok").and_then(Value::as_i64).is_some_and(|ok| ok != 1) {
+            let message = body.get("msg").and_then(Value::as_str).unwrap_or("");
+            last_error = if message.is_empty() {
+                "微博未确认当前登录状态，请重新登录后重试。".to_string()
+            } else {
+                format!("微博验证未通过：{message}")
+            };
+            continue;
+        }
+
+        // 不假定账号资料一定在 data.userInfo；微博不同域名/接口的响应层级不同。
+        let uid = find_nested_string(&body, &["uid", "id", "idstr"])
+            .filter(|value| !value.is_empty());
+        let Some(uid) = uid else {
+            last_error = format!(
+                "接口 {endpoint} 已响应，但返回内容中没有可识别的用户 ID；请确认使用的是本人登录后的 Cookie。"
+            );
+            continue;
+        };
+
+        let screen_name = find_nested_string(&body, &["screen_name", "screenName", "nick", "nickname", "name"])
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| format!("微博用户 {uid}"));
+        let avatar_url = find_nested_string(&body, &["avatar_large", "profile_image_url", "avatar", "profile_image"])
+            .filter(|value| !value.is_empty());
+
+        return Ok(WeiboAccount { uid, screen_name, avatar_url });
     }
-    let data = body.get("data").unwrap_or(&body);
-    let user = data
-        .get("userInfo")
-        .or_else(|| data.get("user_info"))
-        .unwrap_or(data);
 
-    let uid = ["id", "uid", "idstr"]
-        .iter()
-        .find_map(|key| value_as_string(user.get(*key)))
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "微博未确认登录身份。请重新扫码，或导入仍有效的 Cookie。".to_string())?;
+    Err(last_error)
+}
 
-    let screen_name = ["screen_name", "screenName", "name"]
-        .iter()
-        .find_map(|key| value_as_string(user.get(*key)))
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| format!("微博用户 {uid}"));
-    let avatar_url = ["avatar_large", "profile_image_url", "avatar"]
-        .iter()
-        .find_map(|key| value_as_string(user.get(*key)))
-        .filter(|value| !value.is_empty());
-
-    Ok(WeiboAccount {
-        uid,
-        screen_name,
-        avatar_url,
-    })
+/// 在 JSON 对象的嵌套结构中查找指定字段；兼容微博接口响应层级差异。
+fn find_nested_string(value: &Value, keys: &[&str]) -> Option<String> {
+    if let Some(object) = value.as_object() {
+        for key in keys {
+            if let Some(found) = value_as_string(object.get(*key)) {
+                if !found.is_empty() {
+                    return Some(found);
+                }
+            }
+        }
+        for child in object.values() {
+            if let Some(found) = find_nested_string(child, keys) {
+                return Some(found);
+            }
+        }
+    } else if let Some(array) = value.as_array() {
+        for child in array {
+            if let Some(found) = find_nested_string(child, keys) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 fn value_as_string(value: Option<&Value>) -> Option<String> {
