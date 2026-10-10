@@ -13,7 +13,7 @@ import {
 
 type Page = "dashboard" | "accounts" | "delete" | "download" | "tasks" | "settings";
 type TaskState = "执行中" | "等待中" | "已完成" | "失败" | "已取消";
-type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string };
+type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string };
 type WeiboPost = { id: string; date: string; createdAt: string; kind: string; text: string; media: string };
 type PersistedDeleteTask = { id: number; title: string; kind: string; state: TaskState; progress: number; detail: string; createdAt: string; postIds: string[]; dateFrom: string; dateTo: string; keyword: string; postType: string };
 const nav: { id: Page; label: string; icon: typeof Home; group: string }[] = [
@@ -92,7 +92,7 @@ function App() {
   const refreshDeleteTasks = async () => {
     try {
       const saved = await invoke<PersistedDeleteTask[]>("get_delete_tasks");
-      setTasks(saved.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail })));
+      setTasks(saved.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt })));
     } catch (reason) { notify(`读取任务失败：${String(reason)}`); }
   };
   const loadDeletePosts = async () => {
@@ -113,7 +113,7 @@ function App() {
       const task = await invoke<PersistedDeleteTask>("create_delete_task", {
         postIds, dateFrom, dateTo, keyword: keyword.trim(), postType,
       });
-      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail }, ...current.filter(item => item.id !== task.id)]);
+      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt }, ...current.filter(item => item.id !== task.id)]);
       setShowDeleteConfirm(false);
       setPage("tasks");
       notify("删除任务已保存，尚未执行任何删除操作。");
@@ -159,7 +159,7 @@ function App() {
       </div>
       <div className="stats-grid three"><Stat label="待处理用户" value={String(users.length)} icon={Users}/><Stat label="发现媒体" value="—" icon={Image} /><Stat label="下载完成" value="—" icon={Check} /></div>
     </section>;
-    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" actions={<button className="button secondary" onClick={() => void refreshDeleteTasks()}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel"><div className="panel-title"><div><strong>所有任务</strong></div><span className="muted small">删除任务已保存到本地数据库</span></div><div className="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>操作</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><strong>{task.title}</strong><small>任务 #{task.id}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.detail}</td><td><button className="icon-button" aria-label="查看任务详情" onClick={() => notify(`${task.title}：${task.detail}`)}><MoreHorizontal size={17}/></button></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；删除任务创建后不会自动执行。" />}</div></div></section>;
+    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" actions={<button className="button secondary" onClick={() => void refreshDeleteTasks()}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel"><div className="panel-title"><div><strong>所有任务</strong></div><span className="muted small">删除任务已保存到本地数据库</span></div><div className="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>操作</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><strong>{task.title}</strong><small>任务 #{task.id}{task.createdAt ? ` · 创建于 ${new Date(Number(task.createdAt)).toLocaleString()}` : ""}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.detail}</td><td><button className="icon-button" aria-label="查看任务详情" onClick={() => notify(`${task.title}：${task.detail}`)}><MoreHorizontal size={17}/></button></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；删除任务创建后不会自动执行。" />}</div></div></section>;
     // 设置页面由右侧分区承载；左侧菜单负责切换并定位到对应分区。
     if (page === "settings") return <section className="page-stack settings-page">
       <PageHeading title="设置" />
