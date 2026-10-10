@@ -188,7 +188,7 @@ pub async fn get_delete_posts(
         .or_else(|| config_json.pointer("/data/uid").and_then(Value::as_str).map(str::to_string))
         .filter(|v| !v.is_empty() && v != "0")
         .ok_or_else(|| "未能从当前 Cookie 识别微博 UID。请重新登录后再试；当前不会使用模拟数据。".to_string())?;
-    let _ = write_log(&app, "INFO", "delete", &format!("已识别微博 UID，开始分页读取（UID={}）", uid));
+    let _ = write_log(&app, "INFO", "delete", "已识别当前微博账号，开始分页读取（不记录账号标识）");
 
     for page in 1..=1000 {
         if !wait_for_search_resume(&control).await { return Ok(posts); }
