@@ -76,3 +76,7 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .qr-control-modal > p { margin:18px 0 8px; font-size:11px; line-height:1.8; color:var(--muted); }
 .qr-control-modal .auth-error { margin:12px 0 0; }
 .qr-control-modal .modal-actions { margin-top:20px; }
+
+
+/* 下载目录控件在表单网格和设置分区内与字段边界对齐。 */
+.form-grid .input-with-button, .settings-section .input-with-button { margin: 0; }
