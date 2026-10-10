@@ -59,10 +59,14 @@ function App() {
   const [dateFrom, setDateFrom] = useState("2023-01-01");
   const [dateTo, setDateTo] = useState("2024-12-31");
   const [keyword, setKeyword] = useState("");
+  const [appliedDateFrom, setAppliedDateFrom] = useState("2023-01-01");
+  const [appliedDateTo, setAppliedDateTo] = useState("2024-12-31");
+  const [appliedKeyword, setAppliedKeyword] = useState("");
   const [posts, setPosts] = useState<WeiboPost[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState("");
   const [postType, setPostType] = useState("全部类型");
+  const [appliedPostType, setAppliedPostType] = useState("全部类型");
   const [postChecks, setPostChecks] = useState<Record<string, boolean>>({});
   const [tasks, setTasks] = useState<Task[]>([]);
   const [toast, setToast] = useState("");
@@ -80,9 +84,9 @@ function App() {
   const [requestDelay, setRequestDelay] = useState("1200");
   const [theme, setTheme] = useState("system");
   const filteredPosts = useMemo(() => posts.filter(post =>
-    post.text.toLowerCase().includes(keyword.trim().toLowerCase()) &&
-    post.date >= dateFrom && post.date <= dateTo &&
-    (postType === "全部类型" || post.kind === postType)), [posts, keyword, dateFrom, dateTo, postType]);
+    post.text.toLowerCase().includes(appliedKeyword.trim().toLowerCase()) &&
+    post.date >= appliedDateFrom && post.date <= appliedDateTo &&
+    (appliedPostType === "全部类型" || post.kind === appliedPostType)), [posts, appliedKeyword, appliedDateFrom, appliedDateTo, appliedPostType]);
   // 预览值模拟真实下载时可从用户资料、微博元数据和媒体响应中读取的字段。
   const previewValues = { USER_SCREEN_NAME: "travel_diary", POST_TIME: "2024-08-18 14:30:00", POST_ID: "5078219042", MEDIA_INDEX: "01", EXT: ".jpg" };
   const previewFilename = buildFilename(filenameSettings.fileTemplate, previewValues);
@@ -95,14 +99,21 @@ function App() {
       setTasks(saved.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt })));
     } catch (reason) { notify(`读取任务失败：${String(reason)}`); }
   };
-  const loadDeletePosts = async () => {
+  const loadDeletePosts = async (fromDate = dateFrom) => {
     setPostsLoading(true); setPostsError("");
     try {
-      const result = await invoke<WeiboPost[]>("get_delete_posts", { dateFrom });
+      const result = await invoke<WeiboPost[]>("get_delete_posts", { dateFrom: fromDate });
       setPosts(result);
       setPostChecks(current => Object.fromEntries(Object.entries(current).filter(([id]) => result.some(post => post.id === id))));
     } catch (reason) { setPostsError(String(reason)); setPosts([]); setPostChecks({}); }
     finally { setPostsLoading(false); }
+  };
+  const searchDeletePosts = async () => {
+    setAppliedDateFrom(dateFrom);
+    setAppliedDateTo(dateTo);
+    setAppliedKeyword(keyword.trim());
+    setAppliedPostType(postType);
+    await loadDeletePosts(dateFrom);
   };
   useEffect(() => { void refreshDeleteTasks(); }, []);
   useEffect(() => { if (page === "delete" && posts.length === 0 && !postsLoading && !postsError) void loadDeletePosts(); }, [page]);
@@ -111,7 +122,7 @@ function App() {
     if (!postIds.length) { notify("请至少选择一条微博。"); return; }
     try {
       const task = await invoke<PersistedDeleteTask>("create_delete_task", {
-        postIds, dateFrom, dateTo, keyword: keyword.trim(), postType,
+        postIds, dateFrom: appliedDateFrom, dateTo: appliedDateTo, keyword: appliedKeyword.trim(), postType: appliedPostType,
       });
       setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt }, ...current.filter(item => item.id !== task.id)]);
       setShowDeleteConfirm(false);
@@ -130,9 +141,9 @@ function App() {
     if (page === "delete") return <section className="page-stack">
       <PageHeading title="微博删除" subtitle="读取当前登录账号的微博；创建任务仅保存待确认清单，不会执行删除。" />
       <div className="panel filter-panel">
-        <div className="panel-title"><div><strong>筛选条件</strong><span>设置条件后查看真实微博匹配结果</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom("2023-01-01"); setDateTo("2024-12-31"); setPostType("全部类型"); }}>重置筛选</button></div>
+        <div className="panel-title"><div><strong>筛选条件</strong><span>设置日期、关键词和微博类型后，点击搜索应用筛选</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom("2023-01-01"); setDateTo("2024-12-31"); setPostType("全部类型"); }}>重置条件</button></div>
         <div className="filter-grid"><Field label="开始日期"><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field><Field label="结束日期"><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select value={postType} onChange={e => setPostType(e.target.value)}><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
-        <div className="filter-foot"><span><ShieldCheck size={15}/> 预览后确认 · 本阶段不会删除</span><span>匹配 {filteredPosts.length} 条 · 已选 {selectedCount} 条</span></div>
+        <div className="filter-foot"><span><ShieldCheck size={15}/> 预览后确认 · 本阶段不会删除</span><div className="account-actions"><span>匹配 {filteredPosts.length} 条 · 已选 {selectedCount} 条</span><button className="button primary" onClick={() => void searchDeletePosts()} disabled={postsLoading}><Search size={15}/> 搜索微博</button></div></div>
       </div>
       <div className="panel">
         <div className="panel-title"><div><strong>待处理微博</strong><span>已选择 {selectedCount} 条</span></div><div className="account-actions"><button className="button secondary" onClick={() => void loadDeletePosts()} disabled={postsLoading}><RefreshCw size={15}/> 刷新微博</button><button className="button danger" onClick={() => setShowDeleteConfirm(true)} disabled={!selectedCount}><Trash2 size={15}/> 创建删除任务</button></div></div>
