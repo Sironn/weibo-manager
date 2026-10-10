@@ -113,7 +113,14 @@ function App() {
     try {
       await invoke("set_delete_search_cancelled", { cancelled: false });
       await invoke("set_delete_search_paused", { paused: false });
-      await invoke<WeiboPost[]>("get_delete_posts", { dateFrom: fromDate });
+      const result = await invoke<WeiboPost[]>("get_delete_posts", { dateFrom: fromDate });
+      // 事件流负责逐条展示；命令返回值用于补齐未通过事件送达的微博。
+      // 以 ID 去重，并保留读取过程中已显示的顺序和当前勾选状态。
+      setPosts(current => {
+        const merged = new Map(current.map(post => [post.id, post]));
+        result.forEach(post => merged.set(post.id, post));
+        return [...merged.values()];
+      });
     } catch (reason) {
       setPostsError(String(reason));
     } finally {
