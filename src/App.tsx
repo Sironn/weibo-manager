@@ -190,11 +190,50 @@ function App() {
   };
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    void listen<WeiboPost>("delete-post-item", event => {
-      const post = event.payload;
-      setPosts(current => current.some(item => item.id === post.id) ? current : [...current, post]);
-    }).then(stop => { unlisten = stop; log("info", "delete", "微博逐条展示事件监听器已注册"); }).catch(reason => { log("error", "delete", `微博逐条展示事件监听器注册失败：${String(reason)}`); });
-    return () => { unlisten?.(); };
+    let disposed = false;
+    log("info", "delete", "正在注册微博逐条展示事件监听器（delete-post-item）");
+    void listen<unknown>("delete-post-item", event => {
+      const payload = event.payload;
+      if (!payload || typeof payload !== "object") {
+        log("error", "delete", `收到微博逐条展示事件，但 payload 不是对象：${String(payload)}`);
+        return;
+      }
+      const candidate = payload as Partial<WeiboPost>;
+      if (typeof candidate.id !== "string" || !candidate.id) {
+        log("error", "delete", `收到微博逐条展示事件，但 payload 缺少有效 id；字段：${Object.keys(payload).join(", ")}`);
+        return;
+      }
+      const post = candidate as WeiboPost;
+      log("info", "delete", `前端已收到逐条展示事件，微博 ID=${post.id}，正文长度=${typeof post.text === "string" ? post.text.length : "无效"}`);
+      setPosts(current => {
+        if (current.some(item => item.id === post.id)) {
+          log("debug", "delete", `收到重复微博事件，跳过追加，微博 ID=${post.id}，当前数量=${current.length}`);
+          return current;
+        }
+        const next = [...current, post];
+        log("debug", "delete", `已将事件微博追加到前端状态，微博 ID=${post.id}，数量：${current.length} -> ${next.length}`);
+        return next;
+      });
+    }).then(stop => {
+      if (disposed) {
+        stop();
+        log("info", "delete", "监听器注册完成时组件已卸载，立即清理监听器");
+        return;
+      }
+      unlisten = stop;
+      log("info", "delete", "微博逐条展示事件监听器注册成功（delete-post-item）");
+    }).catch(reason => {
+      log("error", "delete", `微博逐条展示事件监听器注册失败：${String(reason)}`);
+    });
+    return () => {
+      disposed = true;
+      if (unlisten) {
+        unlisten();
+        log("info", "delete", "微博逐条展示事件监听器已清理");
+      } else {
+        log("info", "delete", "组件卸载时监听器注册尚未完成；注册完成后将立即清理");
+      }
+    };
   }, []);
   useEffect(() => {
     void invoke<RequestIntervalConfig>("get_request_interval").then(config => {
