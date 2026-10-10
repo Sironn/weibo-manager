@@ -192,7 +192,6 @@ function App() {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     log("info", "delete", "正在注册微博逐条展示事件监听器（delete-post-item）");
-    console.info("[delete] 正在注册微博逐条展示事件监听器（delete-post-item）");
     void listen<unknown>("delete-post-item", event => {
       const payload = event.payload;
       if (!payload || typeof payload !== "object") {
@@ -205,7 +204,6 @@ function App() {
         return;
       }
       const post = candidate as WeiboPost;
-      console.info(`[delete] 前端已收到逐条展示事件，微博 ID=${post.id}`);
       log("info", "delete", `前端已收到逐条展示事件，微博 ID=${post.id}，正文长度=${typeof post.text === "string" ? post.text.length : "无效"}`);
       setPosts(current => {
         if (current.some(item => item.id === post.id)) {
@@ -223,10 +221,8 @@ function App() {
         return;
       }
       unlisten = stop;
-      console.info("[delete] 微博逐条展示事件监听器注册成功（delete-post-item）");
       log("info", "delete", "微博逐条展示事件监听器注册成功（delete-post-item）");
     }).catch(reason => {
-      console.error("[delete] 微博逐条展示事件监听器注册失败（delete-post-item）", reason);
       log("error", "delete", `微博逐条展示事件监听器注册失败：${String(reason)}`);
     });
     return () => {
