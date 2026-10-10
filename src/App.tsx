@@ -192,6 +192,7 @@ function App() {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     log("info", "delete", "正在注册微博逐条展示事件监听器（delete-post-item）");
+    console.info("[delete] 正在注册微博逐条展示事件监听器（delete-post-item）");
     void listen<unknown>("delete-post-item", event => {
       const payload = event.payload;
       if (!payload || typeof payload !== "object") {
@@ -204,6 +205,7 @@ function App() {
         return;
       }
       const post = candidate as WeiboPost;
+      console.info(`[delete] 前端已收到逐条展示事件，微博 ID=${post.id}`);
       log("info", "delete", `前端已收到逐条展示事件，微博 ID=${post.id}，正文长度=${typeof post.text === "string" ? post.text.length : "无效"}`);
       setPosts(current => {
         if (current.some(item => item.id === post.id)) {
@@ -221,8 +223,10 @@ function App() {
         return;
       }
       unlisten = stop;
+      console.info("[delete] 微博逐条展示事件监听器注册成功（delete-post-item）");
       log("info", "delete", "微博逐条展示事件监听器注册成功（delete-post-item）");
     }).catch(reason => {
+      console.error("[delete] 微博逐条展示事件监听器注册失败（delete-post-item）", reason);
       log("error", "delete", `微博逐条展示事件监听器注册失败：${String(reason)}`);
     });
     return () => {
@@ -264,7 +268,7 @@ function App() {
     if (page === "dashboard") return <Dashboard tasks={tasks} go={setPage} />;
     if (page === "accounts") return <Accounts notify={notify} />;
     if (page === "delete") return <section className="page-stack">
-      <PageHeading title="微博删除" subtitle="读取当前登录账号的微博；创建任务仅保存待确认清单，不会执行删除。" />
+      <PageHeading title="微博删除" />
       <div className="panel filter-panel">
         <div className="panel-title"><div><strong>筛选条件</strong><span>日期可留空以搜索全部时间；设置条件后点击搜索应用筛选</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom(""); setDateTo(""); setPostType("全部类型"); setAppliedKeyword(""); setAppliedDateFrom(""); setAppliedDateTo(""); setAppliedPostType("全部类型"); }}>重置条件</button></div>
         <div className="filter-grid"><Field label="开始日期"><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field><Field label="结束日期"><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select value={postType} onChange={e => setPostType(e.target.value)}><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
