@@ -1,6 +1,6 @@
 //! 微博认证流程：打开官方扫码页面、从 WebView Cookie 存储中读取会话。
 //!
-//! Cookie 属于认证凭据：本模块禁止将其写入日志。Cookie 持久化到本地 Settings.json，
+//! Cookie 属于认证凭据：本模块禁止将其写入日志。Cookie 持久化到本地配置目录，
 //! 并仅在用户主动查看时通过专用命令返回前端；Cookie 是否仍可用于具体下载请求，
 //! 应由后续下载接口的实际响应判断。
 
@@ -34,7 +34,7 @@ struct ActiveSession {
     account: WeiboAccount,
 }
 
-/// Tauri 管理的认证状态。Cookie 同时持久化在本地 Settings.json。
+/// Tauri 管理的认证状态。Cookie 持久化在独立的本地配置文件中。
 pub struct SessionStore(Mutex<Option<ActiveSession>>);
 
 impl Default for SessionStore {
@@ -52,9 +52,7 @@ impl SessionStore {
 }
 
 fn persist_cookie(app: &AppHandle, cookie: Option<&str>) -> Result<(), String> {
-    crate::settings::update(app, |settings| {
-        settings.cookie = cookie.map(str::to_owned);
-    })
+    crate::settings::save_cookie(app, cookie)
 }
 
 #[tauri::command]
@@ -142,43 +140,16 @@ fn validate_imported_cookie_format(cookie: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 自动轮询扫码登录状态。只有读取到相关 .cn 登录 Cookie 后才确认获取成功。
-/// 不向前端暴露 Cookie，也不调用固定资料接口判断登录状态。
+/// 查询微博官方登录窗口是否仍打开；此命令不读取或保存 Cookie。
 #[tauri::command]
-pub async fn check_qr_login(
-    app: AppHandle,
-    store: State<'_, SessionStore>,
-) -> Result<Option<WeiboAccount>, String> {
-    let Some(login_window) = app.get_webview_window("weibo-login") else {
-        return Ok(None);
-    };
-
-    let cookie = match tauri::async_runtime::spawn_blocking(move || collect_login_cookie(login_window)).await {
-        Ok(Ok(cookie)) => cookie,
-        // 登录窗口初始化期间可能暂时没有 Cookie；继续等待即可。
-        _ => return Ok(None),
-    };
-
-    if !has_login_cookie(&cookie) {
-        return Ok(None);
-    }
-
-    let account = account_for_acquired_session();
-    persist_cookie(&app, Some(&cookie))?;
-    {
-        let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
-        *current = Some(ActiveSession {
-            cookie,
-            account: account.clone(),
-        });
-    }
-
+pub fn is_qr_login_window_open(app: AppHandle) -> bool { app.get_webview_window("weibo-login").is_some() }
+#[tauri::command]
+pub async fn close_qr_login_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("weibo-login") {
-        let _ = window.close();
+        window.close().map_err(|error| format!("无法关闭微博登录窗口：{error}"))?;
     }
-    Ok(Some(account))
+    Ok(())
 }
-
 #[tauri::command]
 pub async fn finish_qr_login(
     app: AppHandle,
