@@ -194,6 +194,8 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
   const [cookie, setCookie] = useState("");
   const [savedCookie, setSavedCookie] = useState("");
   const [showCookie, setShowCookie] = useState(false);
+  const [showQrDialog, setShowQrDialog] = useState(false);
+  const [configFileNames, setConfigFileNames] = useState<{ cookieFile: string; windowSizeFile: string } | null>(null);
   const [qrState, setQrState] = useState("尚未开始登录");
   const [account, setAccount] = useState<WeiboAccount | null>(null);
   const [busy, setBusy] = useState(false);
@@ -204,41 +206,37 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
     Promise.all([
       invoke<WeiboAccount | null>("get_weibo_account"),
       invoke<string | null>("get_weibo_cookie"),
-    ]).then(([savedAccount, currentCookie]) => {
+      invoke<{ cookieFile: string; windowSizeFile: string }>("get_config_file_names"),
+    ]).then(([savedAccount, currentCookie, fileNames]) => {
       setAccount(savedAccount);
       setSavedCookie(currentCookie ?? "");
+      setConfigFileNames(fileNames);
     }).catch(() => {
       setAccount(null);
       setSavedCookie("");
     });
   }, []);
 
-  // 登录窗口打开后自动轮询后端；后端只在验证成功时返回账号资料并关闭窗口。
+  // 控制弹窗保持打开时检查官方登录窗口；若用户手动关闭且未保存 Cookie，恢复初始状态。
   useEffect(() => {
-    if (qrState !== "等待微博扫码登录完成…" || account) return;
+    if (!showQrDialog) return;
     let cancelled = false;
     let timer: number | undefined;
-    const pollLogin = async () => {
+    const checkWindow = async () => {
       try {
-        const verified = await invoke<WeiboAccount | null>("check_qr_login");
-        if (verified && !cancelled) {
-          setAccount(verified);
-          setSavedCookie((await invoke<string | null>("get_weibo_cookie")) ?? "");
-          setQrState("登录成功");
+        const isOpen = await invoke<boolean>("is_qr_login_window_open");
+        if (!isOpen && !cancelled && !busy) {
+          setShowQrDialog(false);
           setError("");
+          if (!savedCookie) setQrState("尚未开始登录");
           return;
         }
-      } catch {
-        // 自动检测过程中的暂时错误不打断等待；手动验证仍会显示具体原因。
-      }
-      if (!cancelled) timer = window.setTimeout(pollLogin, 3000);
+      } catch { /* 窗口状态检查失败时不自动改变登录状态。 */ }
+      if (!cancelled) timer = window.setTimeout(checkWindow, 1000);
     };
-    timer = window.setTimeout(pollLogin, 1500);
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [qrState, account]);
+    timer = window.setTimeout(checkWindow, 700);
+    return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
+  }, [showQrDialog, busy, savedCookie]);
 
   const startQrLogin = async () => {
     setBusy(true);
@@ -246,6 +244,7 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
     try {
       await invoke("start_qr_login");
       setQrState("等待微博扫码登录完成…");
+      setShowQrDialog(true);
     } catch (reason) {
       setError(String(reason));
       setQrState("无法打开微博登录窗口");
@@ -261,14 +260,21 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
       const verified = await invoke<WeiboAccount>("finish_qr_login");
       setAccount(verified);
       setSavedCookie((await invoke<string | null>("get_weibo_cookie")) ?? "");
-      setQrState("登录成功");
-      notify("已获取并保存微博 Cookie。");
+      setQrState("保存cookie成功");
+      setShowQrDialog(false);
+      notify("保存cookie成功");
     } catch (reason) {
       setError(String(reason));
       setQrState("尚未验证成功，请确认扫码已完成");
     } finally {
       setBusy(false);
     }
+  };
+
+  const closeQrDialog = async () => {
+    try { await invoke("close_qr_login_window"); }
+    catch (reason) { setError(String(reason)); }
+    finally { setShowQrDialog(false); setError(""); if (!savedCookie) setQrState("尚未开始登录"); }
   };
 
   const importCookie = async () => {
@@ -318,10 +324,14 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
     }
   };
 
+  const cookieStorageNote = configFileNames
+    ? `Cookie 会明文保存在本地配置目录的 ${configFileNames.cookieFile} 中，不会写入应用日志。`
+    : "Cookie 会明文保存在本地配置目录中，不会写入应用日志。";
+
   return <div className="page-stack">
     <div className="panel account-panel">
       <div className="panel-title">
-        <div><strong>{account ? "Cookie 已获取" : "获取微博 Cookie"}</strong><span>扫码登录或导入 Cookie；Cookie 会明文保存在本地 Settings.json 中</span></div>
+        <div><strong>{account ? "Cookie 已获取" : "获取微博 Cookie"}</strong><span>扫码登录或导入 Cookie；{cookieStorageNote}</span></div>
         <span className={`tag ${account ? "green" : "neutral"}`}>{account ? "已保存" : "未获取"}</span>
       </div>
       {account && <div className="connected-account">
@@ -339,28 +349,29 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
         <div className="qr-placeholder"><div className="qr-inner"><div className="qr-corner tl"/><div className="qr-corner tr"/><div className="qr-corner bl"/><div className="qr-pattern">{Array.from({length: 49}, (_, i) => <i key={i} style={{opacity: ((i * 17 + 5) % 11) > 3 ? 1 : .12}}/>)}</div></div><div className="qr-overlay"><LockKeyhole size={20}/></div></div>
         <div className="qr-copy">
           <h3>{qrState}</h3>
-          <p>点击下方按钮打开微博官方登录页面。登录完成后，返回此处验证会话；不会仅凭扫码动作判断成功。</p>
+          <p>点击下方按钮打开微博官方登录页面。登录完成后，返回此处验证会话；</p>
           <div className="account-actions">
             <button className="button secondary" onClick={startQrLogin} disabled={busy}><RefreshCw size={15}/> 打开微博扫码登录</button>
-            <button className="button primary" onClick={finishQrLogin} disabled={busy}>已登录，验证并获取 Cookie</button>
           </div>
-          <div className="security-note"><ShieldCheck size={16}/> Cookie 会明文保存在本地 Settings.json，不会写入应用日志。</div>
         </div>
       </div> : <div className="cookie-import">
         <Field label="微博 Cookie"><textarea rows={5} placeholder="粘贴本人微博登录后的 Cookie 请求头内容" value={cookie} onChange={e => setCookie(e.target.value)} autoComplete="off" /></Field>
-        <div className="inline-note"><LockKeyhole size={16}/> Cookie 会明文保存在本地 Settings.json，不会写入应用日志。</div>
+        <div className="inline-note"><LockKeyhole size={16}/> {cookieStorageNote}</div>
         <button className="button primary" onClick={importCookie} disabled={busy}>保存 Cookie</button>
       </div>}
       {error && <div className="auth-error" role="alert">{error}</div>}
     </div>
-    <div className="panel">
-      <div className="panel-title"><div><strong>Cookie 状态</strong><span>本地保存的微博会话</span></div></div>
-      {account ? <div className="connected-account">
-        <div className="avatar"><LockKeyhole size={17}/></div>
-        <div className="user-info"><strong>Cookie 已获取</strong><span>Cookie 已保存在本地 Settings.json 中</span></div>
-        <span className="tag green">已保存</span>
-      </div> : <EmptyState title="尚未获取 Cookie" description="使用扫码登录或导入 Cookie 后即可保存到本地。"/>}
-    </div>
+    {showQrDialog && <div className="modal-backdrop qr-control-backdrop" role="presentation">
+      <div className="modal qr-control-modal" role="dialog" aria-modal="true" aria-labelledby="qr-control-title">
+        <div className="panel-title"><div><strong id="qr-control-title">微博扫码登录</strong><span>{qrState}</span></div><button className="icon-button" onClick={closeQrDialog} aria-label="关闭扫码登录弹窗"><X size={17}/></button></div>
+        <p>点击下方按钮打开微博官方登录页面。登录完成后，返回此处验证会话；</p>
+        {error && <div className="auth-error" role="alert">{error}</div>}
+        <div className="modal-actions">
+          <button className="button ghost" onClick={closeQrDialog} disabled={busy}>关闭</button>
+          <button className="button primary" onClick={finishQrLogin} disabled={busy}>{busy ? "正在验证…" : "已登录，验证并获取 Cookie"}</button>
+        </div>
+      </div>
+    </div>}
   </div>;
 }
 function TaskBadge({ state }: {state: TaskState}) { const cls = state === "已完成" ? "green" : state === "执行中" ? "blue" : state === "失败" ? "red" : state === "等待中" ? "amber" : "neutral"; return <span className={`tag ${cls}`}><span className="tag-dot"/>{state}</span>; }
