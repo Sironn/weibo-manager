@@ -14,11 +14,8 @@ import {
 type Page = "dashboard" | "accounts" | "delete" | "download" | "tasks" | "settings";
 type TaskState = "执行中" | "等待中" | "已完成" | "失败" | "已取消";
 type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string };
-const initialTasks: Task[] = [
-  { id: 1, title: "旅行日记 · 媒体采集", kind: "下载", state: "执行中", progress: 68, detail: "已处理 34 / 50 项" },
-  { id: 2, title: "2023 年微博清理", kind: "删除", state: "等待中", progress: 0, detail: "模拟任务 · 等待确认" },
-  { id: 3, title: "摄影作品备份", kind: "下载", state: "已完成", progress: 100, detail: "共 126 个文件" },
-];
+type WeiboPost = { id: string; date: string; createdAt: string; kind: string; text: string; media: string };
+type PersistedDeleteTask = { id: number; title: string; kind: string; state: TaskState; progress: number; detail: string; createdAt: string; postIds: string[]; dateFrom: string; dateTo: string; keyword: string; postType: string };
 const nav: { id: Page; label: string; icon: typeof Home; group: string }[] = [
   { id: "dashboard", label: "工作台", icon: Home, group: "概览" },
   { id: "accounts", label: "Cookie 管理", icon: LockKeyhole, group: "微博管理" },
@@ -26,12 +23,6 @@ const nav: { id: Page; label: string; icon: typeof Home; group: string }[] = [
   { id: "download", label: "媒体下载", icon: CloudDownload, group: "微博管理" },
   { id: "tasks", label: "任务中心", icon: ListTodo, group: "系统" },
   { id: "settings", label: "设置", icon: Settings2, group: "系统" },
-];
-const demoPosts = [
-  { date: "2024-08-18", type: "原创", text: "周末散步，记录一些沿途的光影。", media: "图片", checked: true },
-  { date: "2024-05-06", type: "转发", text: "分享一组最近很喜欢的城市摄影。", media: "图片", checked: true },
-  { date: "2023-12-21", type: "原创", text: "年末整理：一些旅行途中拍下的风景。", media: "视频", checked: false },
-  { date: "2023-07-09", type: "原创", text: "今天的天空有很漂亮的云。", media: "无媒体", checked: false },
 ];
 // 文件命名设置初始化：兼容旧版参数配置，并为缺失字段提供安全默认值。
 const initialFilenameSettings: FilenameSettings = (() => {
@@ -68,8 +59,12 @@ function App() {
   const [dateFrom, setDateFrom] = useState("2023-01-01");
   const [dateTo, setDateTo] = useState("2024-12-31");
   const [keyword, setKeyword] = useState("");
-  const [postChecks, setPostChecks] = useState<boolean[]>(demoPosts.map(p => p.checked));
-  const [tasks, setTasks] = useState(initialTasks);
+  const [posts, setPosts] = useState<WeiboPost[]>([]);
+  const [postsLoading, setPostsLoading] = useState(false);
+  const [postsError, setPostsError] = useState("");
+  const [postType, setPostType] = useState("全部类型");
+  const [postChecks, setPostChecks] = useState<Record<string, boolean>>({});
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [toast, setToast] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [users, setUsers] = useState(["travel_diary", "photo_notes"]);
@@ -84,14 +79,47 @@ function App() {
   const [concurrency, setConcurrency] = useState("3");
   const [requestDelay, setRequestDelay] = useState("1200");
   const [theme, setTheme] = useState("system");
-  const filteredPosts = useMemo(() => demoPosts.map((post, i) => ({ ...post, checked: postChecks[i] }))
-    .filter(post => post.text.toLowerCase().includes(keyword.toLowerCase()) && post.date >= dateFrom && post.date <= dateTo), [keyword, dateFrom, dateTo, postChecks]);
+  const filteredPosts = useMemo(() => posts.filter(post =>
+    post.text.toLowerCase().includes(keyword.trim().toLowerCase()) &&
+    post.date >= dateFrom && post.date <= dateTo &&
+    (postType === "全部类型" || post.kind === postType)), [posts, keyword, dateFrom, dateTo, postType]);
   // 预览值模拟真实下载时可从用户资料、微博元数据和媒体响应中读取的字段。
   const previewValues = { USER_SCREEN_NAME: "travel_diary", POST_TIME: "2024-08-18 14:30:00", POST_ID: "5078219042", MEDIA_INDEX: "01", EXT: ".jpg" };
   const previewFilename = buildFilename(filenameSettings.fileTemplate, previewValues);
   const previewFoldername = buildFolderName(filenameSettings.folderTemplate, previewValues);
-  const selectedCount = filteredPosts.filter(post => post.checked).length;
+  const selectedCount = posts.filter(post => postChecks[post.id]).length;
+  const selectedFilteredCount = filteredPosts.filter(post => postChecks[post.id]).length;
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
+  const refreshDeleteTasks = async () => {
+    try {
+      const saved = await invoke<PersistedDeleteTask[]>("get_delete_tasks");
+      setTasks(saved.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail })));
+    } catch (reason) { notify(`读取任务失败：${String(reason)}`); }
+  };
+  const loadDeletePosts = async () => {
+    setPostsLoading(true); setPostsError("");
+    try {
+      const result = await invoke<WeiboPost[]>("get_delete_posts");
+      setPosts(result);
+      setPostChecks(current => Object.fromEntries(Object.entries(current).filter(([id]) => result.some(post => post.id === id))));
+    } catch (reason) { setPostsError(String(reason)); setPosts([]); setPostChecks({}); }
+    finally { setPostsLoading(false); }
+  };
+  useEffect(() => { void refreshDeleteTasks(); }, []);
+  useEffect(() => { if (page === "delete" && posts.length === 0 && !postsLoading && !postsError) void loadDeletePosts(); }, [page]);
+  const createDeleteTask = async () => {
+    const postIds = posts.filter(post => postChecks[post.id]).map(post => post.id);
+    if (!postIds.length) { notify("请至少选择一条微博。"); return; }
+    try {
+      const task = await invoke<PersistedDeleteTask>("create_delete_task", {
+        postIds, dateFrom, dateTo, keyword: keyword.trim(), postType,
+      });
+      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail }, ...current.filter(item => item.id !== task.id)]);
+      setShowDeleteConfirm(false);
+      setPage("tasks");
+      notify("删除任务已保存，尚未执行任何删除操作。");
+    } catch (reason) { notify(`创建任务失败：${String(reason)}`); }
+  };
   const saveFilenameSettings = (next: FilenameSettings) => {
     setFilenameSettings(next);
     localStorage.setItem("wm-filename-settings", JSON.stringify(next));
@@ -107,17 +135,20 @@ function App() {
     if (page === "dashboard") return <Dashboard tasks={tasks} go={setPage} />;
     if (page === "accounts") return <Accounts notify={notify} />;
     if (page === "delete") return <section className="page-stack">
-      <PageHeading title="微博删除" />
+      <PageHeading title="微博删除" subtitle="读取当前登录账号的微博；创建任务仅保存待确认清单，不会执行删除。" />
       <div className="panel filter-panel">
-        <div className="panel-title"><div><strong>筛选条件</strong><span>设置条件后查看匹配结果</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom("2023-01-01"); setDateTo("2024-12-31"); }}>重置</button></div>
-        <div className="filter-grid"><Field label="开始日期"><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field><Field label="结束日期"><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
-        <div className="filter-foot"><span><ShieldCheck size={15}/> 预览后确认 · 不可恢复操作</span><span>匹配 {filteredPosts.length} 条</span></div>
+        <div className="panel-title"><div><strong>筛选条件</strong><span>设置条件后查看真实微博匹配结果</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom("2023-01-01"); setDateTo("2024-12-31"); setPostType("全部类型"); }}>重置筛选</button></div>
+        <div className="filter-grid"><Field label="开始日期"><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field><Field label="结束日期"><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select value={postType} onChange={e => setPostType(e.target.value)}><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
+        <div className="filter-foot"><span><ShieldCheck size={15}/> 预览后确认 · 本阶段不会删除</span><span>匹配 {filteredPosts.length} 条 · 已选 {selectedCount} 条</span></div>
       </div>
       <div className="panel">
-        <div className="panel-title"><div><strong>待处理微博</strong><span>已选择 {selectedCount} 条（模拟）</span></div><button className="button danger" onClick={() => setShowDeleteConfirm(true)} disabled={!selectedCount}><Trash2 size={15}/> 预览并确认删除</button></div>
-        <div className="table-wrap"><table><thead><tr><th><input type="checkbox" checked={postChecks.every(Boolean)} onChange={e => setPostChecks(demoPosts.map(() => e.target.checked))} aria-label="全选微博" /></th><th>微博内容</th><th>发布时间</th><th>类型</th><th>媒体</th></tr></thead><tbody>{filteredPosts.map(post => { const idx = demoPosts.findIndex(p => p.date === post.date); return <tr key={post.date}><td><input type="checkbox" checked={postChecks[idx]} onChange={e => setPostChecks(c => c.map((v, i) => i === idx ? e.target.checked : v))} aria-label="选择微博" /></td><td><div className="post-text">{post.text}</div><small>ID: 50{idx}8219042</small></td><td>{post.date}</td><td><span className="tag neutral">{post.type}</span></td><td>{post.media}</td></tr>; })}</tbody></table>{filteredPosts.length === 0 && <EmptyState title="没有匹配的微博" description="尝试调整时间范围或关键词。" />}</div>
+        <div className="panel-title"><div><strong>待处理微博</strong><span>已选择 {selectedCount} 条</span></div><div className="account-actions"><button className="button secondary" onClick={() => void loadDeletePosts()} disabled={postsLoading}><RefreshCw size={15}/> 刷新微博</button><button className="button danger" onClick={() => setShowDeleteConfirm(true)} disabled={!selectedCount}><Trash2 size={15}/> 创建删除任务</button></div></div>
+        {postsError && <div className="auth-error" role="alert">{postsError}<button className="button secondary" onClick={() => void loadDeletePosts()}>重试</button></div>}
+        <div className="table-wrap"><table><thead><tr><th><input type="checkbox" checked={filteredPosts.length > 0 && filteredPosts.every(post => postChecks[post.id])} onChange={e => setPostChecks(current => { const next = { ...current }; filteredPosts.forEach(post => { if (e.target.checked) next[post.id] = true; else delete next[post.id]; }); return next; })} aria-label="全选当前筛选微博" /></th><th>微博内容</th><th>发布时间</th><th>类型</th><th>媒体</th></tr></thead><tbody>{filteredPosts.map(post => <tr key={post.id}><td><input type="checkbox" checked={Boolean(postChecks[post.id])} onChange={e => setPostChecks(current => ({ ...current, [post.id]: e.target.checked }))} aria-label="选择微博" /></td><td><div className="post-text">{post.text || "（无正文）"}</div><small>ID: {post.id}</small></td><td>{post.date}</td><td><span className="tag neutral">{post.kind}</span></td><td>{post.media}</td></tr>)}</tbody></table>
+        {postsLoading && <EmptyState title="正在读取微博" description="正在使用当前登录会话获取微博列表。" />}
+        {!postsLoading && !postsError && filteredPosts.length === 0 && <EmptyState title={posts.length === 0 ? "暂无微博数据" : "没有匹配的微博"} description={posts.length === 0 ? "请确认已登录微博，然后点击刷新微博。" : "尝试调整日期、关键词或微博类型。"}/>}</div>
       </div>
-      {showDeleteConfirm && <div className="modal-backdrop"><div className="modal"><div className="modal-icon warning"><Trash2/></div><h3>确认删除预览</h3><p>当前选择了 {selectedCount} 条模拟微博。真实删除模块尚未启用，此操作不会删除任何微博。</p><div className="warning-box">微博删除不可恢复。正式版本将在此处要求二次确认。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteConfirm(false)}>返回检查</button><button className="button danger" onClick={() => { setShowDeleteConfirm(false); notify("模拟预览完成：未发送任何删除请求。"); }}>确认模拟流程</button></div></div></div>}
+      {showDeleteConfirm && <div className="modal-backdrop"><div className="modal"><div className="modal-icon warning"><Trash2/></div><h3>确认创建删除任务</h3><p>将创建一个包含 {selectedCount} 条微博的待确认任务。本阶段只保存微博 ID 和筛选条件，不会发送删除请求。</p><div className="warning-box">微博删除不可恢复。后续执行阶段会另行加入明确的二次确认。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteConfirm(false)}>返回检查</button><button className="button danger" onClick={() => void createDeleteTask()}>创建待确认任务</button></div></div></div>}
     </section>;
     if (page === "download") return <section className="page-stack">
       <PageHeading title="媒体下载" />
@@ -129,7 +160,7 @@ function App() {
       </div>
       <div className="stats-grid three"><Stat label="待处理用户" value={String(users.length)} icon={Users}/><Stat label="发现媒体" value="—" icon={Image} /><Stat label="下载完成" value="—" icon={Check} /></div>
     </section>;
-    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" actions={<button className="button secondary" onClick={() => notify("当前展示的是本地模拟任务。")}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel"><div className="panel-title"><div><strong>所有任务</strong></div><button className="button ghost" onClick={() => setTasks([])}>清空模拟列表</button></div><div className="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>操作</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><strong>{task.title}</strong><small>任务 #{task.id}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.detail}</td><td><button className="icon-button" aria-label="查看任务详情" onClick={() => notify(`${task.title}：${task.detail}`)}><MoreHorizontal size={17}/></button></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建下载或删除模拟任务后会显示在这里。" />}</div></div></section>;
+    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" actions={<button className="button secondary" onClick={() => void refreshDeleteTasks()}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel"><div className="panel-title"><div><strong>所有任务</strong></div><span className="muted small">删除任务已保存到本地数据库</span></div><div className="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>操作</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><strong>{task.title}</strong><small>任务 #{task.id}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.detail}</td><td><button className="icon-button" aria-label="查看任务详情" onClick={() => notify(`${task.title}：${task.detail}`)}><MoreHorizontal size={17}/></button></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；删除任务创建后不会自动执行。" />}</div></div></section>;
     // 设置页面由右侧分区承载；左侧菜单负责切换并定位到对应分区。
     if (page === "settings") return <section className="page-stack settings-page">
       <PageHeading title="设置" />
