@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   Activity, Archive, ArrowDownToLine, ArrowRight, Check, ChevronDown, CircleHelp, Copy,
   CloudDownload, Eye, EyeOff, FileImage, FolderOpen, Gauge, Home, Image, ListTodo,
@@ -16,6 +17,7 @@ type TaskState = "执行中" | "等待中" | "已完成" | "失败" | "已取消
 type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string };
 type WeiboPost = { id: string; date: string; createdAt: string; kind: string; text: string; media: string };
 type PersistedDeleteTask = { id: number; title: string; kind: string; state: TaskState; progress: number; detail: string; createdAt: string; postIds: string[]; dateFrom: string; dateTo: string; keyword: string; postType: string };
+type RequestIntervalConfig = { mode: "fixed" | "random"; fixedMs: number; minMs: number; maxMs: number };
 const nav: { id: Page; label: string; icon: typeof Home; group: string }[] = [
   { id: "dashboard", label: "工作台", icon: Home, group: "概览" },
   { id: "accounts", label: "Cookie 管理", icon: LockKeyhole, group: "微博管理" },
@@ -65,6 +67,7 @@ function App() {
   const [posts, setPosts] = useState<WeiboPost[]>([]);
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState("");
+  const [postsPaused, setPostsPaused] = useState(false);
   const [postType, setPostType] = useState("全部类型");
   const [appliedPostType, setAppliedPostType] = useState("全部类型");
   const [postChecks, setPostChecks] = useState<Record<string, boolean>>({});
@@ -81,7 +84,10 @@ function App() {
   const [templateTarget, setTemplateTarget] = useState<"file" | "folder">("file");
   const [downloadPath, setDownloadPath] = useState("~/Downloads/WeiboDownloads");
   const [concurrency, setConcurrency] = useState("3");
+  const [requestIntervalMode, setRequestIntervalMode] = useState<"fixed" | "random">("fixed");
   const [requestDelay, setRequestDelay] = useState("1200");
+  const [requestMinDelay, setRequestMinDelay] = useState("1000");
+  const [requestMaxDelay, setRequestMaxDelay] = useState("2000");
   const [theme, setTheme] = useState("system");
   const filteredPosts = useMemo(() => posts.filter(post =>
     post.text.toLowerCase().includes(appliedKeyword.trim().toLowerCase()) &&
@@ -99,23 +105,61 @@ function App() {
       setTasks(saved.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt })));
     } catch (reason) { notify(`读取任务失败：${String(reason)}`); }
   };
-  const loadDeletePosts = async (fromDate = dateFrom) => {
-    setPostsLoading(true); setPostsError("");
+  const loadDeletePosts = async (fromDate = appliedDateFrom) => {
+    if (postsLoading) return;
+    setPostsLoading(true); setPostsError(""); setPostsPaused(false);
+    setPosts([]); setPostChecks({});
     try {
-      const result = await invoke<WeiboPost[]>("get_delete_posts", { dateFrom: fromDate });
-      setPosts(result);
-      setPostChecks(current => Object.fromEntries(Object.entries(current).filter(([id]) => result.some(post => post.id === id))));
-    } catch (reason) { setPostsError(String(reason)); setPosts([]); setPostChecks({}); }
-    finally { setPostsLoading(false); }
+      await invoke("set_delete_search_paused", { paused: false });
+      await invoke<WeiboPost[]>("get_delete_posts", { dateFrom: fromDate });
+    } catch (reason) {
+      setPostsError(String(reason));
+    } finally {
+      setPostsLoading(false);
+      setPostsPaused(false);
+      try { await invoke("set_delete_search_paused", { paused: false }); } catch { /* 搜索已结束，无需额外处理 */ }
+    }
   };
   const searchDeletePosts = async () => {
+    if (postsLoading) return;
     setAppliedDateFrom(dateFrom);
     setAppliedDateTo(dateTo);
     setAppliedKeyword(keyword.trim());
     setAppliedPostType(postType);
     await loadDeletePosts(dateFrom);
   };
+  const toggleDeleteSearchPause = async () => {
+    const nextPaused = !postsPaused;
+    setPostsPaused(nextPaused);
+    try { await invoke("set_delete_search_paused", { paused: nextPaused }); }
+    catch (reason) { setPostsPaused(!nextPaused); setPostsError(`无法控制读取状态：${String(reason)}`); }
+  };
+  const saveRequestInterval = async (config: RequestIntervalConfig) => {
+    try {
+      const saved = await invoke<RequestIntervalConfig>("save_request_interval", { config });
+      setRequestIntervalMode(saved.mode);
+      setRequestDelay(String(saved.fixedMs));
+      setRequestMinDelay(String(saved.minMs));
+      setRequestMaxDelay(String(saved.maxMs));
+    } catch (reason) { notify(`保存请求间隔失败：${String(reason)}`); }
+  };
   useEffect(() => { void refreshDeleteTasks(); }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen<WeiboPost>("delete-post-item", event => {
+      const post = event.payload;
+      setPosts(current => current.some(item => item.id === post.id) ? current : [...current, post]);
+    }).then(stop => { unlisten = stop; });
+    return () => { unlisten?.(); };
+  }, []);
+  useEffect(() => {
+    void invoke<RequestIntervalConfig>("get_request_interval").then(config => {
+      setRequestIntervalMode(config.mode);
+      setRequestDelay(String(config.fixedMs));
+      setRequestMinDelay(String(config.minMs));
+      setRequestMaxDelay(String(config.maxMs));
+    }).catch(reason => notify(`读取请求间隔设置失败：${String(reason)}`));
+  }, []);
   useEffect(() => { if (page === "delete" && posts.length === 0 && !postsLoading && !postsError) void loadDeletePosts(); }, [page]);
   const createDeleteTask = async () => {
     const postIds = posts.filter(post => postChecks[post.id]).map(post => post.id);
@@ -141,15 +185,15 @@ function App() {
     if (page === "delete") return <section className="page-stack">
       <PageHeading title="微博删除" subtitle="读取当前登录账号的微博；创建任务仅保存待确认清单，不会执行删除。" />
       <div className="panel filter-panel">
-        <div className="panel-title"><div><strong>筛选条件</strong><span>日期可留空以搜索全部时间；设置条件后点击搜索应用筛选</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom(""); setDateTo(""); setPostType("全部类型"); }}>重置条件</button></div>
+        <div className="panel-title"><div><strong>筛选条件</strong><span>日期可留空以搜索全部时间；设置条件后点击搜索应用筛选</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom(""); setDateTo(""); setPostType("全部类型"); setAppliedKeyword(""); setAppliedDateFrom(""); setAppliedDateTo(""); setAppliedPostType("全部类型"); }}>重置条件</button></div>
         <div className="filter-grid"><Field label="开始日期"><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field><Field label="结束日期"><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select value={postType} onChange={e => setPostType(e.target.value)}><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
-        <div className="filter-foot"><span><ShieldCheck size={15}/> 预览后确认 · 本阶段不会删除</span><div className="account-actions"><span>匹配 {filteredPosts.length} 条 · 已选 {selectedCount} 条</span><button className="button primary" onClick={() => void searchDeletePosts()} disabled={postsLoading}><Search size={15}/> 搜索微博</button></div></div>
+        <div className="filter-foot"><span><ShieldCheck size={15}/> 预览后确认 · 本阶段不会删除</span><div className="account-actions"><span>匹配 {filteredPosts.length} 条 · 已选 {selectedCount} 条</span><button className="button primary" onClick={() => void searchDeletePosts()} disabled={postsLoading}><Search size={15}/> {postsLoading ? "正在读取…" : "搜索微博"}</button></div></div>
       </div>
       <div className="panel">
-        <div className="panel-title"><div><strong>待处理微博</strong><span>已选择 {selectedCount} 条</span></div><div className="account-actions"><button className="button secondary" onClick={() => void loadDeletePosts(appliedDateFrom)} disabled={postsLoading}><RefreshCw size={15}/> 刷新微博</button><button className="button danger" onClick={() => setShowDeleteConfirm(true)} disabled={!selectedCount}><Trash2 size={15}/> 创建删除任务</button></div></div>
-        {postsError && <div className="auth-error" role="alert">{postsError}<button className="button secondary" onClick={() => void loadDeletePosts(appliedDateFrom)}>重试</button></div>}
-        <div className="table-wrap"><table><thead><tr><th><input type="checkbox" checked={filteredPosts.length > 0 && filteredPosts.every(post => postChecks[post.id])} onChange={e => setPostChecks(current => { const next = { ...current }; filteredPosts.forEach(post => { if (e.target.checked) next[post.id] = true; else delete next[post.id]; }); return next; })} aria-label="全选当前筛选微博" /></th><th>微博内容</th><th>发布时间</th><th>类型</th><th>媒体</th></tr></thead><tbody>{filteredPosts.map(post => <tr key={post.id}><td><input type="checkbox" checked={Boolean(postChecks[post.id])} onChange={e => setPostChecks(current => ({ ...current, [post.id]: e.target.checked }))} aria-label="选择微博" /></td><td><div className="post-text">{post.text || "（无正文）"}</div><small>ID: {post.id}</small></td><td>{post.date}</td><td><span className="tag neutral">{post.kind}</span></td><td>{post.media}</td></tr>)}</tbody></table>
-        {postsLoading && <EmptyState title="正在读取微博" description="正在使用当前登录会话获取微博列表。" />}
+        <div className="panel-title"><div><strong>待处理微博</strong><span>{postsLoading ? (postsPaused ? "读取已暂停" : `正在逐条读取 · 已获取 ${posts.length} 条`) : `已获取 ${posts.length} 条 · 已选择 ${selectedCount} 条`}</span></div><div className="account-actions">{postsLoading && <button className="button secondary" onClick={() => void toggleDeleteSearchPause()}><span>{postsPaused ? "继续读取" : "暂停读取"}</span></button>}<button className="button secondary" onClick={() => void loadDeletePosts(appliedDateFrom)} disabled={postsLoading}><RefreshCw size={15}/> 刷新微博</button><button className="button danger" onClick={() => setShowDeleteConfirm(true)} disabled={!selectedCount}><Trash2 size={15}/> 创建删除任务</button></div></div>
+        {postsError && <div className="auth-error" role="alert">{postsError}<button className="button secondary" onClick={() => void loadDeletePosts(appliedDateFrom)} disabled={postsLoading}>重试</button></div>}
+        <div className="table-wrap delete-posts-scroll"><table><thead><tr><th><input type="checkbox" checked={filteredPosts.length > 0 && filteredPosts.every(post => postChecks[post.id])} onChange={e => setPostChecks(current => { const next = { ...current }; filteredPosts.forEach(post => { if (e.target.checked) next[post.id] = true; else delete next[post.id]; }); return next; })} aria-label="全选当前筛选微博" /></th><th>微博内容</th><th>发布时间</th><th>类型</th><th>媒体</th></tr></thead><tbody>{filteredPosts.map(post => <tr key={post.id}><td><input type="checkbox" checked={Boolean(postChecks[post.id])} onChange={e => setPostChecks(current => ({ ...current, [post.id]: e.target.checked }))} aria-label="选择微博" /></td><td><div className="post-text">{post.text || "（无正文）"}</div><small>ID: {post.id}</small></td><td>{post.date}</td><td><span className="tag neutral">{post.kind}</span></td><td>{post.media}</td></tr>)}</tbody></table>
+        {postsLoading && <div className="delete-search-status" role="status">{postsPaused ? "读取已暂停。点击“继续读取”后会从当前进度继续。" : "正在读取微博；每获取一条就会追加到列表。"} </div>}
         {!postsLoading && !postsError && filteredPosts.length === 0 && <EmptyState title={posts.length === 0 ? "暂无微博数据" : "没有匹配的微博"} description={posts.length === 0 ? "请确认已登录微博，然后点击刷新微博。" : "尝试调整日期、关键词或微博类型。"}/>}</div>
       </div>
       {showDeleteConfirm && <div className="modal-backdrop"><div className="modal"><div className="modal-icon warning"><Trash2/></div><h3>确认创建删除任务</h3><p>将创建一个包含 {selectedCount} 条微博的待确认任务。本阶段只保存微博 ID 和筛选条件，不会发送删除请求。</p><div className="warning-box">微博删除不可恢复。后续执行阶段会另行加入明确的二次确认。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteConfirm(false)}>返回检查</button><button className="button danger" onClick={() => void createDeleteTask()}>创建待确认任务</button></div></div></div>}
@@ -173,7 +217,7 @@ function App() {
           <div className="panel-title"><div><strong>常规设置</strong><span>个性化应用显示与任务行为</span></div></div>
           <Field label="主题"><select value={theme} onChange={e => { setTheme(e.target.value); setDark(e.target.value === "dark"); }}><option value="system">跟随系统（当前预览为浅色）</option><option value="light">浅色</option><option value="dark">深色</option></select></Field>
           <div className="setting-row"><div><strong>任务并发数</strong><span>同时处理的任务数量</span></div><select value={concurrency} onChange={e => setConcurrency(e.target.value)}><option value="1">1 个</option><option value="2">2 个</option><option value="3">3 个</option><option value="5">5 个</option></select></div>
-          <div className="setting-row"><div><strong>请求间隔</strong><span>模拟请求间的等待时间</span></div><select value={requestDelay} onChange={e => setRequestDelay(e.target.value)}><option value="800">800 毫秒</option><option value="1200">1200 毫秒</option><option value="2000">2000 毫秒</option><option value="3000">3000 毫秒</option></select></div>
+          <div className="setting-row request-interval-row"><div><strong>请求间隔</strong><span>控制微博列表读取、删除及媒体下载等网络请求之间的等待时间；间隔设置不能保证完全避免风控。</span></div><div className="request-interval-controls"><select aria-label="请求间隔模式" value={requestIntervalMode} onChange={e => { const mode = e.target.value as "fixed" | "random"; setRequestIntervalMode(mode); void saveRequestInterval({ mode, fixedMs: Number(requestDelay), minMs: Number(requestMinDelay), maxMs: Number(requestMaxDelay) }); }}><option value="fixed">固定间隔</option><option value="random">随机范围</option></select>{requestIntervalMode === "fixed" ? <select aria-label="固定请求间隔" value={requestDelay} onChange={e => { setRequestDelay(e.target.value); void saveRequestInterval({ mode: "fixed", fixedMs: Number(e.target.value), minMs: Number(requestMinDelay), maxMs: Number(requestMaxDelay) }); }}><option value="800">800 毫秒</option><option value="1200">1200 毫秒</option><option value="2000">2000 毫秒</option><option value="3000">3000 毫秒</option><option value="5000">5000 毫秒</option></select> : <div className="request-range"><label>最短 <input type="number" min="500" max="30000" step="100" value={requestMinDelay} onChange={e => setRequestMinDelay(e.target.value)} onBlur={() => { const min = Math.max(500, Number(requestMinDelay) || 500); const max = Math.max(min, Number(requestMaxDelay) || min); void saveRequestInterval({ mode: "random", fixedMs: Number(requestDelay), minMs: min, maxMs: max }); }} /> ms</label><label>最长 <input type="number" min="500" max="60000" step="100" value={requestMaxDelay} onChange={e => setRequestMaxDelay(e.target.value)} onBlur={() => { const min = Math.max(500, Number(requestMinDelay) || 500); const max = Math.max(min, Number(requestMaxDelay) || min); void saveRequestInterval({ mode: "random", fixedMs: Number(requestDelay), minMs: min, maxMs: max }); }} /> ms</label></div>}</div></div>
         </section>
         <section className="panel settings-section" id="settings-filename">
           <div className="panel-title"><div><strong>文件与文件夹命名</strong><span>直接编辑占位符模板；点击变量可插入到当前选中的模板输入框</span></div><span className="tag blue">模板化</span></div>
