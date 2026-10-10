@@ -55,8 +55,8 @@ pub fn write_log(app: &AppHandle, level: &str, source: &str, message: &str) -> R
     let path = dir.join(format!("weibo-manager-{}.log", now.format("%Y-%m-%d")));
     let mut file = OpenOptions::new().create(true).append(true).open(path)
         .map_err(|e| format!("无法打开日志文件：{e}"))?;
-    let safe_source = source.replace(['\\r', '\\n', '\\t'], " ");
-    let safe_message = message.replace(['\\r', '\\n'], " ");
+    let safe_source = source.replace('\r', " ").replace('\n', " ").replace('\t', " ");
+    let safe_message = message.replace('\r', " ").replace('\n', " ");
     writeln!(file, "{} [{}] [{}] {}", now.format("%Y-%m-%d %H:%M:%S%.3f"), level.to_uppercase(), safe_source, safe_message)
         .map_err(|e| format!("无法写入日志文件：{e}"))
 }
