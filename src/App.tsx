@@ -123,12 +123,6 @@ function App() {
     setFilenameSettings(next);
     localStorage.setItem("wm-filename-settings", JSON.stringify(next));
   };
-  const startMockTask = (title: string, kind: Task["kind"]) => {
-    const next: Task = { id: Date.now(), title, kind, state: "等待中", progress: 0, detail: "模拟任务 · 尚未连接微博" };
-    setTasks(current => [next, ...current]);
-    setPage("tasks");
-    notify("已创建模拟任务；当前阶段不会访问微博或执行真实操作。");
-  };
   const pageTitle = nav.find(item => item.id === page)?.label ?? "工作台";
   const renderPage = () => {
     if (page === "dashboard") return <Dashboard tasks={tasks} go={setPage} />;
