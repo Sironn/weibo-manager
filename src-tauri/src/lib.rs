@@ -16,6 +16,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             let saved_settings = settings::load_with_migration(&handle);
+            app.manage(delete::DeleteSearchControl::default());
             // 启动时从独立配置文件恢复 Cookie；Cookie 不写入日志。
             app.manage(auth::SessionStore::from_saved_cookie(saved_settings.cookie.clone()));
             if let Some(window) = app.get_webview_window("main") {
@@ -49,9 +50,12 @@ pub fn run() {
             auth::get_weibo_cookie,
             auth::logout_weibo,
             delete::get_delete_posts,
+            delete::set_delete_search_paused,
             delete::create_delete_task,
             delete::get_delete_tasks,
             settings::get_config_file_names,
+            settings::get_request_interval,
+            settings::save_request_interval,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Weibo Manager");
