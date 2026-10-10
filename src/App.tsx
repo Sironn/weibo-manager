@@ -260,7 +260,6 @@ function App() {
     setFilenameSettings(next);
     localStorage.setItem("wm-filename-settings", JSON.stringify(next));
   };
-  const pageTitle = nav.find(item => item.id === page)?.label ?? "工作台";
   const renderPage = () => {
     if (page === "dashboard") return <Dashboard tasks={tasks} go={setPage} />;
     if (page === "accounts") return <Accounts notify={notify} />;
@@ -338,12 +337,13 @@ function App() {
   // 应用外壳固定视口尺寸，滚动仅交由右侧内容区处理。
   return <div className={dark ? "app-shell dark" : "app-shell"}>
     <aside className="sidebar"><div className="brand"><div className="brand-mark"><img src="/weibo-logo.svg" alt="" /></div><div><strong>Weibo Manager</strong><span>微博管理工作台</span></div></div><nav>{["概览","微博管理","系统"].map(group => <div className="nav-group" key={group}><div className="nav-group-label">{group}</div>{nav.filter(item => item.group === group).map(item => { const Icon = item.icon; return <React.Fragment key={item.id}><button className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => { if (item.id === "settings") { if (page === "settings" && settingsExpanded) { setSettingsExpanded(false); } else { setPage("settings"); setSettingsExpanded(true); setSettingSection("general"); } } else { setPage(item.id); setSettingsExpanded(false); } }}><Icon size={17}/><span>{item.label}</span>{item.id === "tasks" && <span className="nav-count">{tasks.length}</span>}{item.id === "settings" && <ChevronDown size={14} className={settingsExpanded ? "nav-chevron expanded" : "nav-chevron"}/>}</button>{item.id === "settings" && page === "settings" && settingsExpanded && <div className="settings-subnav"><button className={settingSection === "general" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("general"); setSettingsExpanded(true); document.getElementById("settings-general")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><Settings2 size={14}/>常规设置</button><button className={settingSection === "filename" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("filename"); setSettingsExpanded(true); document.getElementById("settings-filename")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><FileImage size={14}/>文件命名</button><button className={settingSection === "security" ? "settings-subnav-item active" : "settings-subnav-item"} onClick={() => { setSettingSection("security"); setSettingsExpanded(true); document.getElementById("settings-security")?.scrollIntoView({behavior:"smooth",block:"start"}); }}><ShieldCheck size={14}/>安全与数据</button></div>}</React.Fragment>; })}</div>)}</nav><div className="sidebar-bottom"><div className="version">WEIBO MANAGER <span>v0.1.0 · 阶段 1</span></div></div></aside>
-    <main className="main-area"><header className="topbar"><div className="breadcrumbs"><span>Weibo Manager</span><span className="crumb-slash">/</span><strong>{pageTitle}</strong></div></header><div className="content">{renderPage()}</div></main>
+    <main className="main-area"><div className="content">{renderPage()}</div></main>
     {toast && <div className="toast"><Check size={17}/>{toast}</div>}
   </div>;
 }
-function PageHeading({ title, subtitle, actions }: {title: string; subtitle?: string; actions?: React.ReactNode}) {
-  return <div className="page-heading"><div><div className="eyebrow">WEIBO MANAGER</div><h1>{title}</h1>{subtitle ? <p>{subtitle}</p> : null}</div>{actions && <div>{actions}</div>}</div>;
+function PageHeading({ subtitle, actions }: {title: string; subtitle?: string; actions?: React.ReactNode}) {
+  if (!subtitle && !actions) return null;
+  return <div className="page-heading"><div>{subtitle ? <p>{subtitle}</p> : null}</div>{actions && <div>{actions}</div>}</div>;
 }
 function Field({ label, children }: {label: string; children: React.ReactNode}) { return <label className="field"><span>{label}</span>{children}</label>; }
 function Stat({ label, value, icon: Icon, helper }: {label: string; value: string; icon: typeof Home; helper?: string}) { return <div className="stat-card"><div className="stat-top"><span>{label}</span><div className="stat-icon"><Icon size={17}/></div></div><strong>{value}</strong>{helper ? <span className="stat-helper">{helper}</span> : null}</div>; }
