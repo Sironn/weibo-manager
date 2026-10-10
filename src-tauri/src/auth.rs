@@ -1,7 +1,7 @@
 //! 微博认证流程：打开官方扫码页面、从 WebView Cookie 存储中读取会话。
 //!
-//! Cookie 属于认证凭据：本模块禁止将其写入日志或返回前端。当前阶段仅在进程内存保存，
-//! 登录成功以获取到相关的 .cn 登录 Cookie 为准；Cookie 是否仍可用于具体下载请求，
+//! Cookie 属于认证凭据：本模块禁止将其写入日志。Cookie 持久化到本地 Settings.json，
+//! 并仅在用户主动查看时通过专用命令返回前端；Cookie 是否仍可用于具体下载请求，
 //! 应由后续下载接口的实际响应判断。
 
 use serde::Serialize;
@@ -34,9 +34,28 @@ struct ActiveSession {
     account: WeiboAccount,
 }
 
-/// Tauri 管理的认证状态。Cookie 仅存在于后端进程内存中。
-#[derive(Default)]
+/// Tauri 管理的认证状态。Cookie 同时持久化在本地 Settings.json。
 pub struct SessionStore(Mutex<Option<ActiveSession>>);
+
+impl Default for SessionStore {
+    fn default() -> Self { Self(Mutex::new(None)) }
+}
+
+impl SessionStore {
+    pub fn from_saved_cookie(cookie: Option<String>) -> Self {
+        let session = cookie.filter(|value| !value.trim().is_empty()).map(|cookie| ActiveSession {
+            cookie,
+            account: account_for_acquired_session(),
+        });
+        Self(Mutex::new(session))
+    }
+}
+
+fn persist_cookie(app: &AppHandle, cookie: Option<&str>) -> Result<(), String> {
+    crate::settings::update(app, |settings| {
+        settings.cookie = cookie.map(str::to_owned);
+    })
+}
 
 #[tauri::command]
 pub async fn start_qr_login(app: AppHandle) -> Result<(), String> {
@@ -145,6 +164,7 @@ pub async fn check_qr_login(
     }
 
     let account = account_for_acquired_session();
+    persist_cookie(&app, Some(&cookie))?;
     {
         let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
         *current = Some(ActiveSession {
@@ -177,6 +197,7 @@ pub async fn finish_qr_login(
     }
 
     let account = account_for_acquired_session();
+    persist_cookie(&app, Some(&cookie))?;
     {
         let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
         *current = Some(ActiveSession {
@@ -193,6 +214,7 @@ pub async fn finish_qr_login(
 
 #[tauri::command]
 pub async fn import_weibo_cookie(
+    app: AppHandle,
     cookie: String,
     store: State<'_, SessionStore>,
 ) -> Result<WeiboAccount, String> {
@@ -207,12 +229,20 @@ pub async fn import_weibo_cookie(
 
     // 导入时不请求固定资料接口。Cookie 的实际可用性由后续 m.weibo.cn 下载响应判断。
     let account = account_for_acquired_session();
+    persist_cookie(&app, Some(&cookie))?;
     let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
     *current = Some(ActiveSession {
         cookie,
         account: account.clone(),
     });
     Ok(account)
+}
+
+/// 只在用户主动查看 Cookie 时调用此命令；普通账号状态查询不返回 Cookie。
+#[tauri::command]
+pub fn get_weibo_cookie(store: State<'_, SessionStore>) -> Result<Option<String>, String> {
+    let current = store.0.lock().map_err(|_| "读取认证状态失败，请重启应用后重试。".to_string())?;
+    Ok(current.as_ref().map(|session| session.cookie.clone()))
 }
 
 /// 只向前端返回账号状态，不返回 Cookie 本身。
@@ -227,6 +257,7 @@ pub fn logout_weibo(
     app: AppHandle,
     store: State<'_, SessionStore>,
 ) -> Result<(), String> {
+    persist_cookie(&app, None)?;
     let mut current = store.0.lock().map_err(|_| "清理认证状态失败，请重启应用后重试。".to_string())?;
     *current = None;
     drop(current);
