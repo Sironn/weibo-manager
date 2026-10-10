@@ -126,9 +126,16 @@ async fn wait_for_search_resume(control: &DeleteSearchControl) -> bool {
     }
     !control.cancelled.load(Ordering::Relaxed)
 }
-async fn wait_request_interval(app: &AppHandle) {
+async fn wait_request_interval(app: &AppHandle, control: &DeleteSearchControl) -> bool {
     let delay = crate::settings::request_delay_ms(app);
-    tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(delay))).await.ok();
+    let started = std::time::Instant::now();
+    while started.elapsed().as_millis() < delay as u128 {
+        if !wait_for_search_resume(control).await { return false; }
+        let remaining = delay.saturating_sub(started.elapsed().as_millis() as u64);
+        let slice = remaining.min(150);
+        tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(slice))).await.ok();
+    }
+    !control.cancelled.load(Ordering::Relaxed)
 }
 fn looks_rate_limited(body: &Value) -> bool {
     let mut messages = Vec::new();
@@ -182,7 +189,7 @@ pub async fn get_delete_posts(
 
     for page in 1..=1000 {
         if !wait_for_search_resume(&control).await { return Ok(posts); }
-        wait_request_interval(&app).await;
+        if !wait_request_interval(&app, &control).await { return Ok(posts); }
         if !wait_for_search_resume(&control).await { return Ok(posts); }
         let url = format!("https://m.weibo.cn/api/container/getIndex?containerid=107603{uid}&page={page}");
         let response = client.get(&url).header(COOKIE, &cookie)
