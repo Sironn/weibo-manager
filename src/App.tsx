@@ -68,6 +68,11 @@ function App() {
   const [appliedKeyword, setAppliedKeyword] = useState("");
   const [posts, setPosts] = useState<WeiboPost[]>([]);
   const acceptDeletePostEvents = useRef(true);
+  // 递增代次使取消或 Cookie 删除前启动的异步搜索结果失效。
+  const deleteSearchGeneration = useRef(0);
+  const activeDeleteSearchGeneration = useRef<number | null>(null);
+  // 即使 UI 已显示取消，也等旧 Tauri 命令退出后才允许启动下一次搜索。
+  const deleteSearchInFlight = useRef(false);
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState("");
   const [postsPaused, setPostsPaused] = useState(false);
@@ -108,6 +113,8 @@ function App() {
   const selectedCount = posts.filter(post => postChecks[post.id]).length;
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
   const resetAfterCookieDeleted = () => {
+    deleteSearchGeneration.current += 1;
+    activeDeleteSearchGeneration.current = null;
     acceptDeletePostEvents.current = false;
     setPostsLoading(false);
     setPosts([]);
@@ -136,44 +143,62 @@ function App() {
     } catch (reason) { notify(`读取任务失败：${String(reason)}`); }
   };
   const loadDeletePosts = async (fromDate = appliedDateFrom) => {
-    if (postsLoading) return;
+    if (deleteSearchInFlight.current) return;
+    deleteSearchInFlight.current = true;
+    const searchId = ++deleteSearchGeneration.current;
+    activeDeleteSearchGeneration.current = searchId;
+    const isCurrentSearch = () =>
+      deleteSearchGeneration.current === searchId &&
+      activeDeleteSearchGeneration.current === searchId &&
+      acceptDeletePostEvents.current;
     acceptDeletePostEvents.current = true;
     setPostsLoading(true); setPostsError(""); setPostsPaused(false); setPostsCancelling(false);
     log("info", "delete", `开始搜索微博，起始日期：${fromDate || "不限"}`);
     setPosts([]); setPostChecks({});
     try {
       const savedCookie = await invoke<string | null>("get_weibo_cookie");
+      if (!isCurrentSearch()) return;
       if (!savedCookie || !savedCookie.trim()) {
         throw "尚未登录微博，请先扫码登录或导入 Cookie。";
       }
       const cookieStatus = await invoke<string>("check_weibo_cookie");
+      if (!isCurrentSearch()) return;
       if (cookieStatus !== "valid") {
         throw "Cookie 已失效，请先重新登录微博或导入有效 Cookie。";
       }
       await invoke("set_delete_search_cancelled", { cancelled: false });
+      if (!isCurrentSearch()) return;
       await invoke("set_delete_search_paused", { paused: false });
+      if (!isCurrentSearch()) return;
       const result = await invoke<WeiboPost[]>("get_delete_posts", { dateFrom: fromDate });
+      if (!isCurrentSearch()) return;
       // 事件流负责逐条展示；命令返回值用于补齐未通过事件送达的微博。
-      // 以 ID 去重，并保留读取过程中已显示的顺序和当前勾选状态。
+      // 更新状态时再次核对代次，防止排队中的旧状态更新覆盖取消或删除后的状态。
       setPosts(current => {
+        if (!isCurrentSearch()) return current;
         const merged = new Map(current.map(post => [post.id, post]));
         result.forEach(post => merged.set(post.id, post));
         return [...merged.values()];
       });
       log("info", "delete", `微博搜索完成，后端返回 ${result.length} 条结果`);
     } catch (reason) {
+      if (!isCurrentSearch()) return;
       log("error", "delete", `微博搜索失败：${String(reason)}`);
       setPostsError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setPostsLoading(false);
-      setPostsPaused(false);
-      setPostsCancelling(false);
-      if (acceptDeletePostEvents.current) {
+      if (isCurrentSearch()) {
+        setPostsLoading(false);
+        setPostsPaused(false);
+        setPostsCancelling(false);
         try {
           await invoke("set_delete_search_paused", { paused: false });
-          await invoke("set_delete_search_cancelled", { cancelled: false });
+          if (isCurrentSearch()) {
+            await invoke("set_delete_search_cancelled", { cancelled: false });
+          }
         } catch { /* 搜索已结束，无需额外处理 */ }
+        if (isCurrentSearch()) activeDeleteSearchGeneration.current = null;
       }
+      deleteSearchInFlight.current = false;
     }
   };
   const searchDeletePosts = async () => {
@@ -193,11 +218,21 @@ function App() {
     catch (reason) { setPostsPaused(!nextPaused); setPostsError(`无法控制读取状态：${String(reason)}`); }
   };
   const cancelDeleteSearch = async () => {
-    if (!postsLoading || postsCancelling) return;
+    if (!postsLoading || postsCancelling || activeDeleteSearchGeneration.current === null) return;
+    // 先在前端让本次搜索失效，再通知后端；迟到的返回值和事件都会被忽略。
+    deleteSearchGeneration.current += 1;
+    activeDeleteSearchGeneration.current = null;
+    acceptDeletePostEvents.current = false;
+    setPostsLoading(false);
     setPostsCancelling(true);
     setPostsPaused(false);
-    try { await invoke("set_delete_search_cancelled", { cancelled: true }); }
-    catch (reason) { setPostsCancelling(false); setPostsError(`取消读取失败：${String(reason)}`); }
+    try {
+      await invoke("set_delete_search_cancelled", { cancelled: true });
+      setPostsCancelling(false);
+    } catch (reason) {
+      setPostsCancelling(false);
+      setPostsError(`取消读取失败：${String(reason)}`);
+    }
   };
   const saveRequestInterval = async (config: RequestIntervalConfig) => {
     try {
@@ -256,7 +291,8 @@ function App() {
         log("error", "delete", `收到微博逐条展示事件，但 payload 不是对象：${String(payload)}`);
         return;
       }
-      if (!acceptDeletePostEvents.current) return;
+      const eventSearchId = activeDeleteSearchGeneration.current;
+      if (!acceptDeletePostEvents.current || eventSearchId === null) return;
       const candidate = payload as Partial<WeiboPost>;
       if (typeof candidate.id !== "string" || !candidate.id) {
         log("error", "delete", `收到微博逐条展示事件，但 payload 缺少有效 id；字段：${Object.keys(payload).join(", ")}`);
@@ -265,6 +301,7 @@ function App() {
       const post = candidate as WeiboPost;
       log("info", "delete", `前端已收到逐条展示事件，微博 ID=${post.id}，正文长度=${typeof post.text === "string" ? post.text.length : "无效"}`);
       setPosts(current => {
+        if (!acceptDeletePostEvents.current || activeDeleteSearchGeneration.current !== eventSearchId) return current;
         if (current.some(item => item.id === post.id)) {
           log("debug", "delete", `收到重复微博事件，跳过追加，微博 ID=${post.id}，当前数量=${current.length}`);
           return current;
@@ -346,7 +383,7 @@ function App() {
       </div>
       <div className="panel">
         <div className="panel-title"><div><strong>待处理微博</strong><span>{postsLoading ? (postsCancelling ? `正在取消读取 · 保留已获取 ${posts.length} 条` : postsPaused ? "读取已暂停" : `正在逐条读取 · 已获取 ${posts.length} 条`) : `已获取 ${posts.length} 条 · 已选择 ${selectedCount} 条`}</span></div><div className="account-actions">{postsLoading && !postsCancelling && <><button className="button secondary continue-reading-button" onClick={() => void toggleDeleteSearchPause()}><span>{postsPaused ? "继续读取" : "暂停读取"}</span></button><button className="button danger" onClick={() => void cancelDeleteSearch()}><X size={15}/> 取消读取</button></> }<button className="button secondary" onClick={() => void loadDeletePosts(appliedDateFrom)} disabled={postsLoading}><RefreshCw size={15}/> 刷新微博</button><button className="button danger" onClick={() => setShowDeleteConfirm(true)} disabled={!selectedCount}><Trash2 size={15}/> 创建删除任务</button></div></div>
-        {postsError && <div className="auth-error" role="alert">{postsError}<button className="button secondary" onClick={() => void loadDeletePosts(appliedDateFrom)} disabled={postsLoading}>重试</button></div>}
+        {postsError && <div className="auth-error" role="alert">{postsError}<button className="button secondary" onClick={() => { if (postsError.includes("尚未登录微博")) setPostsError(""); else void loadDeletePosts(appliedDateFrom); }} disabled={postsLoading}>重试</button></div>}
         <div className="table-wrap delete-posts-scroll"><table><thead><tr><th><input type="checkbox" checked={filteredPosts.length > 0 && filteredPosts.every(post => postChecks[post.id])} onChange={e => setPostChecks(current => { const next = { ...current }; filteredPosts.forEach(post => { if (e.target.checked) next[post.id] = true; else delete next[post.id]; }); return next; })} aria-label="全选当前筛选微博" /></th><th>微博内容</th><th>发布时间</th><th>类型</th><th>媒体</th></tr></thead><tbody>{filteredPosts.map(post => <tr key={post.id}><td><input type="checkbox" checked={Boolean(postChecks[post.id])} onChange={e => setPostChecks(current => ({ ...current, [post.id]: e.target.checked }))} aria-label="选择微博" /></td><td><div className="post-text">{post.text || "（无正文）"}</div><small>ID: {post.id}</small></td><td>{post.date}</td><td><span className="tag neutral">{post.kind}</span></td><td>{post.media}</td></tr>)}</tbody></table>
         {postsLoading && <div className="delete-search-status" role="status">{postsPaused ? "读取已暂停。点击“继续读取”后会从当前进度继续。" : "正在读取微博；每获取一条就会追加到列表。"} </div>}
         {!postsLoading && !postsError && filteredPosts.length === 0 && <EmptyState title={posts.length === 0 ? "暂无微博数据" : "没有匹配的微博"} description={posts.length === 0 ? "请确认已登录微博，然后点击刷新微博。" : "尝试调整日期、关键词或微博类型。"}/>}</div>

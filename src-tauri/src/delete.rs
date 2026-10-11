@@ -146,17 +146,21 @@ pub fn set_delete_search_paused(paused: bool, control: State<'_, DeleteSearchCon
 }
 #[tauri::command]
 pub fn set_delete_search_cancelled(cancelled: bool, control: State<'_, DeleteSearchControl>) {
-    control.cancelled.store(cancelled, Ordering::Relaxed);
+    // Cookie 删除期间不允许迟到的前端收尾逻辑重新启用搜索。
+    if !cancelled && control.cookie_removal.load(Ordering::Acquire) { return; }
+    control.cancelled.store(cancelled, Ordering::Release);
     if cancelled {
         // 取消时解除暂停，避免暂停中的读取任务一直等待。
         control.paused.store(false, Ordering::Relaxed);
     }
 }
 async fn wait_for_search_resume(control: &DeleteSearchControl) -> bool {
-    while control.paused.load(Ordering::Relaxed) && !control.cancelled.load(Ordering::Relaxed) {
+    while control.paused.load(Ordering::Acquire)
+        && !control.cancelled.load(Ordering::Acquire)
+        && !control.cookie_removal.load(Ordering::Acquire) {
         tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(150))).await.ok();
     }
-    !control.cancelled.load(Ordering::Relaxed)
+    !control.cancelled.load(Ordering::Acquire) && !control.cookie_removal.load(Ordering::Acquire)
 }
 async fn wait_request_interval(app: &AppHandle, control: &DeleteSearchControl) -> bool {
     let delay = crate::settings::request_delay_ms(app);
@@ -259,6 +263,9 @@ pub async fn get_delete_posts(
         if page_posts.is_empty() { break; }
         let reached_start = !date_from.trim().is_empty() && page_posts.iter().all(|post| post.date < date_from);
         for post in page_posts {
+            if control.cancelled.load(Ordering::Acquire) || control.cookie_removal.load(Ordering::Acquire) {
+                return Ok(posts);
+            }
             if seen.insert(post.id.clone()) {
                 posts.push(post.clone());
                 if let Err(error) = app.emit("delete-post-item", post.clone()) {
