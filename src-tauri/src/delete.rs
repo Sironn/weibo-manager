@@ -534,6 +534,7 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
    }
  }
  let mut targets:Vec<String>=if retry{task.post_ids.iter().filter(|id|!successful.contains(*id)).cloned().collect()}else{task.post_ids.clone()};
+ if !retry { task.results.clear(); }
  let overlaps:Vec<String>=targets.iter().filter(|id|claimed.contains(*id)).cloned().collect();
  targets.retain(|id|!claimed.contains(id));
  for id in overlaps {
@@ -549,7 +550,7 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
    return Ok(task);
  }
  let mut id_to_bid=std::collections::HashMap::new();let mut wanted=std::collections::HashSet::new();for id in &targets{let bid=numeric_id_to_bid(id).ok_or_else(||format!("微博 ID 格式无效：{id}"))?;wanted.insert(bid.clone());id_to_bid.insert(id.clone(),bid);}
- task.state="执行中".into();task.progress=((successful.len()*100)/task.post_ids.len()).min(100)as u8;task.detail=format!("正在查找本人微博删除链接，待处理 {} 条",targets.len());if !retry{task.results.clear();}
+ task.state="执行中".into();task.progress=((successful.len()*100)/task.post_ids.len()).min(100)as u8;task.detail=format!("正在查找本人微博删除链接，待处理 {} 条",targets.len());
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());let mut urls=std::collections::HashMap::new();
  for page in 1..=500{if !wait_delete_resume(&control).await{break;}let response=client.get(format!("https://weibo.cn/{uid}/profile?page={page}")).header(COOKIE,&cookie).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(REFERER,"https://weibo.cn/").send().await.map_err(|e|format!("读取本人微博删除链接失败：{e}"))?;
  if response.status().as_u16()==401||response.status().as_u16()==403{task.state="失败".into();task.detail=format!("读取本人微博主页被拒绝（HTTP {}），尚未执行删除",response.status().as_u16());save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());return Ok(task);}
