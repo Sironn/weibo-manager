@@ -190,6 +190,29 @@ function App() {
   useEffect(() => {
     void initializeLogger().then(setLoggingEnabled);
   }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void listen("cookie-deleted", () => {
+      setTasks([]);
+      setPosts([]);
+      setPostChecks({});
+      setPostsError("");
+      setPostsPaused(false);
+      setPostsCancelling(false);
+      setDateFrom("");
+      setDateTo("");
+      setKeyword("");
+      setAppliedDateFrom("");
+      setAppliedDateTo("");
+      setAppliedKeyword("");
+      setPostType("全部类型");
+      setAppliedPostType("全部类型");
+    }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(reason => {
+      log("error", "auth", `注册 Cookie 删除同步监听失败：${String(reason)}`);
+    });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
   const toggleLogging = async (enabled: boolean) => {
     try {
       const saved = await updateLoggerEnabled(enabled);

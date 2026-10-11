@@ -127,6 +127,8 @@ impl Drop for TaskExecutionGuard<'_> {
 
 pub(crate) async fn begin_cookie_removal(control: &DeleteSearchControl) {
     control.cookie_removal.store(true, Ordering::Release);
+    control.cancelled.store(true, Ordering::Release);
+    control.paused.store(false, Ordering::Release);
     control.task_cancelled.store(true, Ordering::Release);
     control.task_paused.store(false, Ordering::Release);
     while control.task_running.load(Ordering::Acquire) {

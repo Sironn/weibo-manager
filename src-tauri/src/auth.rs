@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use crate::logger::write_log;
 use tauri::{
     webview::WebviewWindowBuilder,
-    AppHandle, Manager, State, WebviewUrl, WebviewWindow,
+    AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow,
 };
 use url::Url;
 
@@ -325,6 +325,8 @@ pub async fn delete_weibo_cookie(
         if let Some(window) = app.get_webview_window("weibo-login") {
             let _ = window.close();
         }
+        // Cookie 删除事件是认证、任务中心和未来媒体下载模块共享的状态同步契约。
+        let _ = app.emit("cookie-deleted", ());
         let _ = write_log(&app, "INFO", "auth", "Cookie 与关联任务已删除");
         Ok(())
     })();
