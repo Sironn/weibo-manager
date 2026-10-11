@@ -56,6 +56,7 @@ pub fn run() {
             delete::set_delete_search_cancelled,
             delete::create_delete_task,
             delete::get_delete_tasks,
+            delete::remove_delete_tasks,
             delete::execute_delete_task,
             delete::set_delete_task_paused,
             delete::set_delete_task_cancelled,

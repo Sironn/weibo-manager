@@ -2,7 +2,7 @@
 //! 本模块仅获取微博、保存待确认任务；不包含任何真实删除请求。
 
 use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
-use rusqlite::{params, Connection, TransactionBehavior};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -568,6 +568,44 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());if fatal{break;}task_sleep(crate::settings::request_delay_ms(&app)).await;}
  if control.task_cancelled.load(Ordering::Relaxed){task.state="已取消".into();task.detail=format!("任务已取消，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if task.results.iter().any(|r|r.state=="失败")||task.results.len()<task.post_ids.len(){task.state="失败".into();}else{task.state="已完成".into();}
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());Ok(task)
+}
+
+#[tauri::command]
+pub fn remove_delete_tasks(
+    task_ids: Vec<u64>,
+    app: AppHandle,
+    control: State<'_, DeleteSearchControl>,
+) -> Result<Vec<u64>, String> {
+    if task_ids.is_empty() { return Err("请先选择要删除的任务。".into()); }
+    // 与真实删除执行共用互斥标记，避免删除记录和启动任务同时发生。
+    if control.task_running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return Err("有删除任务正在执行，请等待任务结束后再删除记录。".into());
+    }
+    let _execution_guard = TaskExecutionGuard(&control.task_running);
+    let mut db = db_connection(&app)?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| format!("无法锁定任务数据库：{e}"))?;
+    let mut unique_ids = std::collections::HashSet::new();
+    let mut removed_ids = Vec::new();
+    for task_id in task_ids {
+        if !unique_ids.insert(task_id) { continue; }
+        let state = tx.query_row(
+            "SELECT state FROM tasks WHERE id=?1 AND kind='删除'",
+            params![task_id.to_string()],
+            |row| row.get::<_, String>(0),
+        ).optional().map_err(|e| format!("读取任务状态失败：{e}"))?;
+        let Some(state) = state else { continue; };
+        if state == "执行中" {
+            return Err(format!("任务 #{} 正在执行，不能删除。", task_id));
+        }
+        let changed = tx.execute(
+            "DELETE FROM tasks WHERE id=?1 AND kind='删除'",
+            params![task_id.to_string()],
+        ).map_err(|e| format!("删除任务 #{} 失败：{e}", task_id))?;
+        if changed > 0 { removed_ids.push(task_id); }
+    }
+    tx.commit().map_err(|e| format!("提交任务删除失败：{e}"))?;
+    Ok(removed_ids)
 }
 
 #[tauri::command]
