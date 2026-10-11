@@ -100,7 +100,6 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
   .request-range { flex-wrap: wrap; }
 }
 
-.task-list-panel{display:flex;flex-direction:column;min-height:240px;max-height:calc(100vh - 330px);min-width:0}
 .task-list-heading{flex-shrink:0;align-items:center}
 .task-list-heading .small{margin:0;display:flex;align-items:center;align-self:center}
 .task-list-panel .button{display:inline-flex;align-items:center;justify-content:center;line-height:1.25}
@@ -116,7 +115,18 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .table-wrap table:has(th:nth-child(6)) td .account-actions{display:flex;align-items:center;flex-wrap:nowrap;gap:5px;margin:0}
 
 /* 工作台与 Cookie 管理页的主体内容在可用区域内居中。 */
-.content.content-centered{display:block;width:100%}
+.content.content-centered{display:block;width:auto;max-width:none;min-width:0;margin:0;padding-left:32px;padding-right:32px}
 .content.content-centered>.page-stack{width:100%;max-width:1200px;margin:0 auto;min-width:0}
 .content.content-centered>.page-stack>.panel,.content.content-centered>.page-stack>.stats-grid{width:100%}
+.cookie-check-container{display:flex;flex-direction:column;gap:10px;flex:1;min-width:0;margin-left:8px}
+.cookie-check-container .cookie-check-actions{margin:0;padding:0;justify-content:flex-start}
+.cookie-check-container .auth-success,.cookie-check-container .auth-error{margin:0}
+.filter-foot{gap:12px}
+.filter-foot>.account-actions{margin-left:auto;justify-content:flex-end}
+.continue-reading-button{align-self:center;min-height:32px;padding-top:8px;padding-bottom:8px;line-height:1.25}
+.task-center-content{display:flex;flex-direction:column;overflow:hidden}
+.task-center-content>.page-stack{flex:1;min-height:0}
+.task-center-content>.page-stack>.task-list-panel{flex:1;min-height:0;max-height:none}
+.task-list-panel{display:flex;flex-direction:column;min-height:0;min-width:0}
+
 .auth-success{margin:14px 20px 0;padding:10px 12px;border-radius:6px;background:#e8f8ef;color:#2d9666;font-size:11px;line-height:1.6}

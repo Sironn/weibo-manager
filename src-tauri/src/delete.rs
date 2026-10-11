@@ -319,9 +319,9 @@ pub fn create_delete_task(
         (true, false) => format!("截至 {}", date_to),
         (false, false) => format!("{} 至 {}", date_from, date_to),
     };
-    let detail = format!("待确认 · {} 条微博 · 日期 {} · 类型 {} · 关键词 {}{}",
+    let detail = format!("待确认 {} 条微博，日期 {}，类型 {}，关键词 {}{}",
         post_ids.len(), date_label, post_type, if keyword.trim().is_empty() { "无" } else { keyword.trim() },
-        if skipped > 0 { format!(" · 已跳过与其他未完成任务重叠的 {} 条微博", skipped) } else { String::new() });
+        if skipped > 0 { format!("，已跳过与其他未完成任务重叠的 {} 条微博", skipped) } else { String::new() });
     let task = DeleteTask {
         id, title: format!("微博删除 · {} 条", post_ids.len()), kind: "删除".into(),
         state: "等待中".into(), progress: 0, detail, created_at: created_at.clone(),
