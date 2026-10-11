@@ -16,7 +16,7 @@ import {
 type Page = "dashboard" | "accounts" | "delete" | "download" | "tasks" | "settings";
 type TaskState = "执行中" | "等待中" | "已完成" | "失败" | "已取消";
 type DeletePostResult = { postId: string; state: string; detail: string };
-type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string; results?: DeletePostResult[] };
+type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string; postIds?: string[]; dateFrom?: string; dateTo?: string; keyword?: string; postType?: string; results?: DeletePostResult[] };
 type WeiboPost = { id: string; date: string; createdAt: string; kind: string; text: string; media: string };
 type PersistedDeleteTask = { id: number; title: string; kind: string; state: TaskState; progress: number; detail: string; createdAt: string; postIds: string[]; dateFrom: string; dateTo: string; keyword: string; postType: string; results?: DeletePostResult[] };
 type RequestIntervalConfig = { mode: "fixed" | "random"; fixedMs: number; minMs: number; maxMs: number };
@@ -79,6 +79,7 @@ function App() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [executingDeleteTask, setExecutingDeleteTask] = useState<number | null>(null);
   const [deleteActionTask, setDeleteActionTask] = useState<Task | null>(null);
+  const [moreTask, setMoreTask] = useState<Task | null>(null);
   const [users, setUsers] = useState(["travel_diary", "photo_notes"]);
   const [newUser, setNewUser] = useState("");
   // 文件名与文件夹名模板分别保存；当前阶段只演示模板配置，不执行真实下载。
@@ -108,7 +109,7 @@ function App() {
   const refreshDeleteTasks = async (showSuccess = false) => {
     try {
       const saved = await invoke<PersistedDeleteTask[]>("get_delete_tasks");
-      setTasks(saved.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, results: task.results })));
+      setTasks(saved.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results })));
       if (showSuccess) notify("刷新成功");
     } catch (reason) { notify(`读取任务失败：${String(reason)}`); }
   };
@@ -180,7 +181,7 @@ function App() {
     let disposed = false;
     void listen<PersistedDeleteTask>("delete-task-updated", event => {
       const task = event.payload;
-      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, results: task.results }, ...current.filter(item => item.id !== task.id)]);
+      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }, ...current.filter(item => item.id !== task.id)]);
     }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(reason => {
       log("error", "delete", `注册删除任务进度监听失败：${String(reason)}`);
     });
@@ -265,7 +266,7 @@ function App() {
     setExecutingDeleteTask(task.id);
     try {
       const result = await invoke<PersistedDeleteTask>("execute_delete_task", { taskId: task.id });
-      setTasks(current => [{ id: result.id, title: result.title, kind: "删除", state: result.state, progress: result.progress, detail: result.detail, createdAt: result.createdAt, results: result.results }, ...current.filter(item => item.id !== result.id)]);
+      setTasks(current => [{ id: result.id, title: result.title, kind: "删除", state: result.state, progress: result.progress, detail: result.detail, createdAt: result.createdAt, postIds: result.postIds, dateFrom: result.dateFrom, dateTo: result.dateTo, keyword: result.keyword, postType: result.postType, results: result.results }, ...current.filter(item => item.id !== result.id)]);
       notify(result.state === "已完成" ? "删除任务执行完成。" : "删除任务结束：" + result.state);
     } catch (reason) {
       notify("执行删除任务失败：" + String(reason));
@@ -280,7 +281,7 @@ function App() {
       const task = await invoke<PersistedDeleteTask>("create_delete_task", {
         postIds, dateFrom: appliedDateFrom, dateTo: appliedDateTo, keyword: appliedKeyword.trim(), postType: appliedPostType,
       });
-      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt }, ...current.filter(item => item.id !== task.id)]);
+      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }, ...current.filter(item => item.id !== task.id)]);
       setShowDeleteConfirm(false);
       setPage("tasks");
       notify("删除任务已保存。请在任务中心再次确认后执行。");
@@ -319,7 +320,16 @@ function App() {
       </div>
       <div className="stats-grid three"><Stat label="待处理用户" value={String(users.length)} icon={Users}/><Stat label="发现媒体" value="—" icon={Image} /><Stat label="下载完成" value="—" icon={Check} /></div>
     </section>;
-    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" actions={<button className="button secondary" onClick={() => void refreshDeleteTasks(true)}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel"><div className="panel-title"><div><strong>所有任务</strong></div><span className="muted small">任务已保存到本地数据库</span></div><div className="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>操作</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><strong>{task.title}</strong><small>任务 #{task.id}{task.createdAt ? ` · 创建于 ${new Date(Number(task.createdAt)).toLocaleString()}` : ""}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.detail}</td><td><div className="account-actions">{task.kind === "删除" && (task.state === "等待中" || task.state === "失败" || task.state === "已取消") && <button className="button danger" disabled={executingDeleteTask !== null} onClick={() => setDeleteActionTask(task)}}>{executingDeleteTask === task.id ? "正在执行…" : task.state === "等待中" ? "执行删除" : "重试任务"}</button>}<button className="icon-button" aria-label="查看任务详情" onClick={() => window.alert(`${task.title}\n${task.detail}\n\n${task.results?.length ? task.results.map(item => `${item.postId} · ${item.state} · ${item.detail}`).join("\n") : "暂无逐条执行结果"}`)}><MoreHorizontal size={17}/></button></div></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；执行前会再次要求确认。" />}</div></div>      {deleteActionTask && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-action-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-action-title">{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "确认重试删除任务" : "确认执行删除任务"}</h3><p>{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "任务“" + deleteActionTask.title + "”此前未完整完成。重试时会跳过已确认删除成功的微博，只处理失败或未处理项目。" : "即将向微博发送真实删除请求。任务“" + deleteActionTask.title + "”将逐条执行删除操作。"}</p><div className="warning-box">微博删除不可恢复，请确认任务内容后继续。</div><div className="modal-actions"><button className="button ghost" onClick={() => setDeleteActionTask(null)}>取消</button><button className="button danger" onClick={() => void confirmDeleteTask()}>确认执行</button></div></div></div>}
+    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" actions={<button className="button secondary" onClick={() => void refreshDeleteTasks(true)}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel"><div className="panel-title"><div><strong>所有任务</strong></div><span className="muted small">任务已保存到本地数据库</span></div><div className="table-wrap"><table><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>更多</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><strong>{task.title}</strong><small>任务 #{task.id}{task.createdAt ? ` · 创建于 ${new Date(Number(task.createdAt)).toLocaleString()}` : ""}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.kind === "删除" && task.state === "等待中" ? "待确认 · " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}</td><td><div className="account-actions">{task.kind === "删除" && (task.state === "等待中" || task.state === "失败" || task.state === "已取消") && <button className="button danger" disabled={executingDeleteTask !== null} onClick={() => setDeleteActionTask(task)}}>{executingDeleteTask === task.id ? "正在执行…" : task.state === "等待中" ? "执行删除" : "重试任务"}</button>}<button className="icon-button" aria-label="更多任务信息" title="更多" onClick={() => setMoreTask(task)}><MoreHorizontal size={17}/></button></div></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；执行前会再次要求确认。" />}</div></div>      {moreTask && <div className="modal-backdrop" role="presentation"><div className="modal" style={{width:"min(720px, 100%)", maxHeight:"80vh", overflowY:"auto"}} role="dialog" aria-modal="true" aria-labelledby="more-task-title"><div className="modal-icon" style={{background:"#eef2ff",color:"#4f67ce"}}><MoreHorizontal/></div><h3 id="more-task-title">更多 · {moreTask.title}</h3>
+        <div style={{display:"grid",gap:10,fontSize:12}}>
+          {moreTask.postIds && <div><strong>任务总条数：</strong>{moreTask.postIds.length} 条</div>}
+          {moreTask.results && moreTask.results.length > 0 && <div><strong>执行结果：</strong>已处理 {moreTask.results.length} 条，成功 {moreTask.results.filter(item => item.state === "已删除").length} 条，失败 {moreTask.results.filter(item => item.state === "失败").length} 条</div>}
+          {moreTask.results?.some(item => item.state === "失败" && item.detail.trim()) && <div><strong>失败原因：</strong><div style={{display:"grid",gap:6,marginTop:6}}>{moreTask.results.filter(item => item.state === "失败" && item.detail.trim()).map(item => <div key={item.postId}>{item.postId}：{item.detail}</div>)}</div></div>}
+          {(moreTask.dateFrom || moreTask.dateTo || moreTask.keyword?.trim() || (moreTask.postType && moreTask.postType !== "全部类型")) && <div><strong>筛选条件：</strong><div style={{display:"grid",gap:5,marginTop:6}}>{(moreTask.dateFrom || moreTask.dateTo) && <div>日期：{moreTask.dateFrom || "不限"} 至 {moreTask.dateTo || "不限"}</div>}{moreTask.postType && moreTask.postType !== "全部类型" && <div>微博类型：{moreTask.postType}</div>}{moreTask.keyword?.trim() && <div>关键词：{moreTask.keyword}</div>}</div></div>}
+          {moreTask.detail.trim() && <div><strong>任务信息：</strong>{moreTask.detail}</div>}
+          {moreTask.results && moreTask.results.length > 0 && <div><strong>逐条结果：</strong><div style={{display:"grid",gap:6,marginTop:6}}>{moreTask.results.map(item => <div key={item.postId}>{item.postId} · {item.state} · {item.detail}</div>)}</div></div>}
+        </div><div className="modal-actions"><button className="button secondary" onClick={() => setMoreTask(null)}>关闭</button></div></div></div>}
+            {deleteActionTask && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-action-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-action-title">{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "确认重试删除任务" : "确认执行删除任务"}</h3><p>{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "任务“" + deleteActionTask.title + "”此前未完整完成。重试时会跳过已确认删除成功的微博，只处理失败或未处理项目。" : "即将向微博发送真实删除请求。任务“" + deleteActionTask.title + "”将逐条执行删除操作。"}</p><div className="warning-box">微博删除不可恢复，请确认任务内容后继续。</div><div className="modal-actions"><button className="button ghost" onClick={() => setDeleteActionTask(null)}>取消</button><button className="button danger" onClick={() => void confirmDeleteTask()}>确认执行</button></div></div></div>}
     </section>;
     // 设置页面由右侧分区承载；左侧菜单负责切换并定位到对应分区。
     if (page === "settings") return <section className="page-stack settings-page">
