@@ -153,6 +153,57 @@ fn validate_imported_cookie_format(cookie: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 在微博官方网页窗口内添加验证按钮。通过窗口标题传递点击动作，不向远程网页暴露 Tauri API。
+#[tauri::command]
+pub async fn ensure_qr_login_controls(app: AppHandle) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("weibo-login") else { return Ok(()); };
+    let script = r#"(function(){
+      if (!document.body || document.getElementById('__wm_qr_controls')) return;
+      const style=document.createElement('style');
+      style.id='__wm_qr_controls_style';
+      style.textContent='#__wm_qr_controls{position:fixed;z-index:2147483000;right:18px;bottom:18px;display:flex;align-items:center;gap:12px;padding:12px 14px;background:#fff;border:1px solid #dbe2ef;border-radius:12px;box-shadow:0 8px 28px rgba(20,35,70,.22);font:14px/1.4 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;color:#26334a}#__wm_qr_controls button{border:0;border-radius:7px;padding:10px 14px;background:#4e68d9;color:white;font-weight:600;cursor:pointer}#__wm_qr_controls button.secondary{background:#eef1f7;color:#47536a}#__wm_qr_error_backdrop{position:fixed;inset:0;z-index:2147483600;background:rgba(18,26,43,.48);display:grid;place-items:center;font:14px/1.6 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}#__wm_qr_error_box{width:min(420px,calc(100vw - 40px));box-sizing:border-box;background:white;color:#27334d;border-radius:12px;padding:24px;box-shadow:0 18px 60px rgba(0,0,0,.28)}#__wm_qr_error_box h3{margin:0 0 12px;font-size:17px}#__wm_qr_error_box p{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;color:#a32626}#__wm_qr_error_box button{display:block;margin:20px 0 0 auto;border:0;border-radius:7px;padding:9px 16px;background:#4e68d9;color:white;font-weight:600;cursor:pointer}';
+      document.head.appendChild(style);
+      const root=document.createElement('div');root.id='__wm_qr_controls';
+      const label=document.createElement('span');label.textContent='完成扫码后，点击验证并获取 Cookie';
+      const verify=document.createElement('button');verify.textContent='已登录，验证并获取 Cookie';
+      verify.onclick=function(){document.title='__WM_VERIFY_QR__';};
+      const close=document.createElement('button');close.className='secondary';close.textContent='关闭';close.onclick=function(){document.title='__WM_CLOSE_QR__';};
+      root.append(label,verify,close);document.body.appendChild(root);
+    })();"#;
+    window.eval(script).map_err(|error| format!("无法在微博网页窗口添加验证按钮：{error}"))
+}
+
+#[tauri::command]
+pub async fn show_qr_login_error(app: AppHandle, message: String) -> Result<(), String> {
+    let Some(window) = app.get_webview_window("weibo-login") else { return Ok(()); };
+    let encoded = serde_json::to_string(&message).map_err(|error| format!("编码登录错误信息失败：{error}"))?;
+    let script = format!(r#"(function(){{
+      const old=document.getElementById('__wm_qr_error_backdrop'); if(old) old.remove();
+      const back=document.createElement('div'); back.id='__wm_qr_error_backdrop';
+      const box=document.createElement('div'); box.id='__wm_qr_error_box'; box.setAttribute('role','alertdialog'); box.setAttribute('aria-modal','true');
+      const title=document.createElement('h3'); title.textContent='Cookie 验证失败';
+      const detail=document.createElement('p'); detail.textContent={encoded};
+      const button=document.createElement('button'); button.textContent='知道了'; button.onclick=function(){{back.remove();}};
+      box.append(title,detail,button); back.appendChild(box); document.body.appendChild(back);
+    }})();"#);
+    window.eval(&script).map_err(|error| format!("无法显示扫码验证错误：{error}"))
+}
+
+#[tauri::command]
+pub async fn take_qr_login_action(app: AppHandle) -> Result<Option<String>, String> {
+    let Some(window) = app.get_webview_window("weibo-login") else { return Ok(None); };
+    let title = window.title().map_err(|error| format!("读取微博登录窗口标题失败：{error}"))?;
+    if title == "__WM_VERIFY_QR__" {
+        window.set_title("微博扫码登录").map_err(|error| format!("恢复微博登录窗口标题失败：{error}"))?;
+        return Ok(Some("verify".into()));
+    }
+    if title == "__WM_CLOSE_QR__" {
+        window.set_title("微博扫码登录").map_err(|error| format!("恢复微博登录窗口标题失败：{error}"))?;
+        return Ok(Some("close".into()));
+    }
+    Ok(None)
+}
+
 /// 查询微博官方登录窗口是否仍打开；此命令不读取或保存 Cookie。
 #[tauri::command]
 pub fn is_qr_login_window_open(app: AppHandle) -> bool { app.get_webview_window("weibo-login").is_some() }

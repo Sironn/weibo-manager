@@ -75,6 +75,7 @@ function App() {
   const deleteSearchInFlight = useRef(false);
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState("");
+  const [cookieValidity, setCookieValidity] = useState<"unknown" | "checking" | "valid" | "invalid">("unknown");
   const [postsPaused, setPostsPaused] = useState(false);
   const [postsCancelling, setPostsCancelling] = useState(false);
   const [postType, setPostType] = useState("全部类型");
@@ -141,6 +142,32 @@ function App() {
     setMoreTask(null);
     setTasks([]);
   };
+  const refreshCookieValidity = async (): Promise<boolean> => {
+    setCookieValidity("checking");
+    try {
+      const savedCookie = await invoke<string | null>("get_weibo_cookie");
+      if (!savedCookie?.trim()) {
+        setCookieValidity("invalid");
+        setPostsError("尚未登录微博，请先扫码登录或导入 Cookie。");
+        return false;
+      }
+      const status = await invoke<string>("check_weibo_cookie");
+      if (status === "valid") {
+        setCookieValidity("valid");
+        setPostsError(current => current.includes("尚未登录微博") || current.includes("Cookie 已失效") || current.includes("Cookie 检测失败") ? "" : current);
+        return true;
+      }
+      setCookieValidity("invalid");
+      setPostsError("Cookie 已失效，请先重新登录微博或导入有效 Cookie。");
+      return false;
+    } catch (reason) {
+      setCookieValidity("invalid");
+      setPostsError(String(reason).includes("尚未登录微博") ? "尚未登录微博，请先扫码登录或导入 Cookie。" : `Cookie 检测失败：${String(reason)}`);
+      return false;
+    }
+  };
+  useEffect(() => { void refreshCookieValidity(); }, []);
+
   const refreshDeleteTasks = async (showSuccess = false) => {
     try {
       const saved = await invoke<PersistedDeleteTask[]>("get_delete_tasks");
@@ -209,7 +236,7 @@ function App() {
     }
   };
   const searchDeletePosts = async () => {
-    if (postsLoading) return;
+    if (postsLoading || cookieValidity !== "valid") return;
     const now = new Date();
     const effectiveEndDate = dateTo || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     setAppliedDateFrom(dateFrom);
@@ -376,6 +403,7 @@ function App() {
   };
   const createDeleteTask = async () => {
     const postIds = posts.filter(post => postChecks[post.id]).map(post => post.id);
+    if (cookieValidity !== "valid") { notify("请先登录微博并确认 Cookie 可用。"); return; }
     if (!postIds.length) { notify("请至少选择一条微博。"); return; }
     try {
       const task = await invoke<PersistedDeleteTask>("create_delete_task", {
@@ -401,17 +429,17 @@ function App() {
   };
   const renderPage = () => {
     if (page === "dashboard") return <Dashboard tasks={tasks} go={setPage} />;
-    if (page === "accounts") return <Accounts notify={notify} onCookieDeleted={resetAfterCookieDeleted} />;
+    if (page === "accounts") return <Accounts notify={notify} onCookieDeleted={resetAfterCookieDeleted} onCookieStatusChange={refreshCookieValidity} />;
     if (page === "delete") return <section className="page-stack">
       <PageHeading title="微博删除" />
+      {postsError && <div className="cookie-warning-banner" role="alert"><span>{postsError}</span><button className="button secondary" onClick={() => void refreshCookieValidity()} disabled={cookieValidity === "checking"}>{cookieValidity === "checking" ? "正在检测…" : "重试"}</button></div>}
       <div className="panel filter-panel">
         <div className="panel-title"><div><strong>筛选条件</strong><span>日期可留空以搜索全部时间；设置条件后点击搜索应用筛选</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom(""); setDateTo(""); setPostType("全部类型"); setAppliedKeyword(""); setAppliedDateFrom(""); setAppliedDateTo(""); setAppliedPostType("全部类型"); }}>重置条件</button></div>
         <div className="filter-grid"><Field label="开始日期"><input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field><Field label="结束日期"><input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select value={postType} onChange={e => setPostType(e.target.value)}><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
-        <div className="filter-foot"><span>匹配 {filteredPosts.length} 条 · 已选 {selectedCount} 条</span><div className="account-actions"><button className="button primary" onClick={() => void searchDeletePosts()} disabled={postsLoading}><Search size={15}/> {postsLoading ? "正在读取…" : "搜索微博"}</button></div></div>
+        <div className="filter-foot"><span>匹配 {filteredPosts.length} 条 · 已选 {selectedCount} 条</span><div className="account-actions"><button className="button primary" onClick={() => void searchDeletePosts()} disabled={postsLoading || cookieValidity !== "valid"}><Search size={15}/> {postsLoading ? "正在读取…" : "搜索微博"}</button></div></div>
       </div>
       <div className="panel">
-        <div className="panel-title"><div><strong>待处理微博</strong><span>{postsLoading ? (postsCancelling ? `正在取消读取 · 保留已获取 ${posts.length} 条` : postsPaused ? "读取已暂停" : `正在逐条读取 · 已获取 ${posts.length} 条`) : `已获取 ${posts.length} 条 · 已选择 ${selectedCount} 条`}</span></div><div className="account-actions">{postsLoading && !postsCancelling && <><button className="button secondary continue-reading-button" onClick={() => void toggleDeleteSearchPause()}><span>{postsPaused ? "继续读取" : "暂停读取"}</span></button><button className="button danger" onClick={() => void cancelDeleteSearch()}><X size={15}/> 取消读取</button></> }<button className="button secondary" onClick={() => void loadDeletePosts(appliedDateFrom)} disabled={postsLoading}><RefreshCw size={15}/> 刷新微博</button><button className="button danger" onClick={() => setShowDeleteConfirm(true)} disabled={!selectedCount}><Trash2 size={15}/> 创建删除任务</button></div></div>
-        {postsError && <div className="auth-error" role="alert">{postsError}<button className="button secondary" onClick={() => { if (postsError.includes("尚未登录微博")) setPostsError(""); else void loadDeletePosts(appliedDateFrom); }} disabled={postsLoading}>重试</button></div>}
+        <div className="panel-title"><div><strong>待处理微博</strong><span>{postsLoading ? (postsCancelling ? `正在取消读取 · 保留已获取 ${posts.length} 条` : postsPaused ? "读取已暂停" : `正在逐条读取 · 已获取 ${posts.length} 条`) : `已获取 ${posts.length} 条 · 已选择 ${selectedCount} 条`}</span></div><div className="account-actions">{postsLoading && !postsCancelling && <><button className="button secondary continue-reading-button" onClick={() => void toggleDeleteSearchPause()}><span>{postsPaused ? "继续读取" : "暂停读取"}</span></button><button className="button danger" onClick={() => void cancelDeleteSearch()}><X size={15}/> 取消读取</button></> }<button className="button secondary" onClick={() => void loadDeletePosts(appliedDateFrom)} disabled={postsLoading || cookieValidity !== "valid"}><RefreshCw size={15}/> 刷新微博</button><button className="button danger" onClick={() => setShowDeleteConfirm(true)} disabled={!selectedCount || cookieValidity !== "valid"}><Trash2 size={15}/> 创建删除任务</button></div></div>
         <div className="table-wrap delete-posts-scroll"><table><thead><tr><th><input type="checkbox" checked={filteredPosts.length > 0 && filteredPosts.every(post => postChecks[post.id])} onChange={e => setPostChecks(current => { const next = { ...current }; filteredPosts.forEach(post => { if (e.target.checked) next[post.id] = true; else delete next[post.id]; }); return next; })} aria-label="全选当前筛选微博" /></th><th>微博内容</th><th>发布时间</th><th>类型</th><th>媒体</th></tr></thead><tbody>{filteredPosts.map(post => <tr key={post.id}><td><input type="checkbox" checked={Boolean(postChecks[post.id])} onChange={e => setPostChecks(current => ({ ...current, [post.id]: e.target.checked }))} aria-label="选择微博" /></td><td><div className="post-text">{post.text || "（无正文）"}</div><small>ID: {post.id}</small></td><td>{post.date}</td><td><span className="tag neutral">{post.kind}</span></td><td>{post.media}</td></tr>)}</tbody></table>
         {postsLoading && <div className="delete-search-status" role="status">{postsPaused ? "读取已暂停。点击“继续读取”后会从当前进度继续。" : "正在读取微博；每获取一条就会追加到列表。"} </div>}
         {!postsLoading && !postsError && filteredPosts.length === 0 && <EmptyState title={posts.length === 0 ? "暂无微博数据" : "没有匹配的微博"} description={posts.length === 0 ? "请确认已登录微博，然后点击刷新微博。" : "尝试调整日期、关键词或微博类型。"}/>}</div>
@@ -502,7 +530,7 @@ function Dashboard({ tasks, go }: {tasks: Task[]; go: (page: Page) => void}) {
 }
 type WeiboAccount = { uid: string; screenName: string; avatarUrl?: string | null };
 
-function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => void; onCookieDeleted: () => void}) {
+function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (message: string) => void; onCookieDeleted: () => void; onCookieStatusChange: () => Promise<boolean>}) {
   const [method, setMethod] = useState<"qr" | "cookie">("qr");
   const [cookie, setCookie] = useState("");
   const [savedCookie, setSavedCookie] = useState("");
@@ -533,24 +561,35 @@ function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => voi
     });
   }, []);
 
-  // 控制弹窗保持打开时检查官方登录窗口；若用户手动关闭且未保存 Cookie，恢复初始状态。
+  // 扫码网页窗口内的验证按钮通过标题标记向主界面发起请求。
   useEffect(() => {
     if (!showQrDialog) return;
     let cancelled = false;
     let timer: number | undefined;
-    const checkWindow = async () => {
+    const pollWindow = async () => {
       try {
         const isOpen = await invoke<boolean>("is_qr_login_window_open");
         if (!isOpen && !cancelled && !busy) {
           setShowQrDialog(false);
           setError("");
-          if (!savedCookie) setQrState("获取Cookie");
+          if (!savedCookie) setQrState("获取 Cookie");
           return;
         }
-      } catch { /* 窗口状态检查失败时不自动改变登录状态。 */ }
-      if (!cancelled) timer = window.setTimeout(checkWindow, 1000);
+        if (isOpen && !busy) {
+          await invoke("ensure_qr_login_controls");
+          const action = await invoke<string | null>("take_qr_login_action");
+          if (action === "verify") await finishQrLogin();
+          if (action === "close") {
+            await invoke("close_qr_login_window");
+            setShowQrDialog(false);
+            if (!savedCookie) setQrState("获取 Cookie");
+            return;
+          }
+        }
+      } catch { /* 关闭窗口或页面加载期间，下一轮继续检查。 */ }
+      if (!cancelled) timer = window.setTimeout(pollWindow, 500);
     };
-    timer = window.setTimeout(checkWindow, 700);
+    timer = window.setTimeout(pollWindow, 500);
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
   }, [showQrDialog, busy, savedCookie]);
 
@@ -576,12 +615,15 @@ function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => voi
       const verified = await invoke<WeiboAccount>("finish_qr_login");
       setAccount(verified);
       setSavedCookie((await invoke<string | null>("get_weibo_cookie")) ?? "");
-      setQrState("保存cookie成功");
+      setQrState("保存 Cookie 成功");
       setShowQrDialog(false);
-      notify("保存cookie成功");
+      setCookieCheckResult((await onCookieStatusChange()) ? "Cookie 可用" : "Cookie 已失效");
+      notify("保存 Cookie 成功");
     } catch (reason) {
-      setError(String(reason));
+      const message = String(reason);
+      setError(message);
       setQrState("尚未验证成功，请确认扫码已完成");
+      try { await invoke("show_qr_login_error", { message }); } catch { /* 网页窗口关闭时忽略 */ }
     } finally {
       setBusy(false);
     }
@@ -605,6 +647,7 @@ function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => voi
       setAccount(verified);
       setSavedCookie((await invoke<string | null>("get_weibo_cookie")) ?? "");
       setCookie("");
+      setCookieCheckResult((await onCookieStatusChange()) ? "Cookie 可用" : "Cookie 已失效");
       notify("Cookie 已保存。");
     } catch (reason) {
       setError(String(reason));
@@ -618,8 +661,8 @@ function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => voi
     setCookieCheckResult("正在检测…");
     setError("");
     try {
-      const result = await invoke<string>("check_weibo_cookie");
-      setCookieCheckResult(result === "valid" ? "Cookie 可用" : "Cookie 已失效");
+      const valid = await onCookieStatusChange();
+      setCookieCheckResult(valid ? "Cookie 可用" : "Cookie 已失效");
     } catch (reason) {
       setCookieCheckResult(`检测失败：${String(reason)}`);
     } finally {
@@ -672,10 +715,9 @@ function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => voi
         <div className="user-info cookie-value"><strong>微博 Cookie</strong><span>{showCookie ? savedCookie : "••••••••••••••••"}</span></div>
         <button className="icon-button" onClick={() => setShowCookie(value => !value)} title={showCookie ? "隐藏 Cookie" : "显示 Cookie"} aria-label={showCookie ? "隐藏 Cookie" : "显示 Cookie"} disabled={!savedCookie}>{showCookie ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
         <button className="icon-button" onClick={copyCookie} disabled={!savedCookie} title="复制 Cookie" aria-label="复制 Cookie"><Copy size={17}/></button>
-        <button className="button ghost" onClick={() => setShowDeleteCookieConfirm(true)} disabled={busy}>删除Cookie</button>
-        <div className="cookie-check-container"><div className="account-actions cookie-check-actions"><button className="button secondary" onClick={() => void checkCookie()} disabled={cookieCheckBusy || !savedCookie}><ShieldCheck size={15}/>{cookieCheckBusy ? "正在检测…" : "检测 Cookie 可用性"}</button></div>
-        {cookieCheckResult && <div className={cookieCheckResult === "Cookie 可用" ? "auth-success" : "auth-error"} role="status">{cookieCheckResult}</div>}</div>
-      </div>}
+        <button className="button ghost" onClick={() => setShowDeleteCookieConfirm(true)} disabled={busy}>删除 Cookie</button>
+      </div>
+      <div className="cookie-validity-row"><button className="button secondary" onClick={() => void checkCookie()} disabled={cookieCheckBusy || !savedCookie}><ShieldCheck size={15}/>{cookieCheckBusy ? "正在检测…" : "检测 Cookie 可用性"}</button>{cookieCheckResult && <div className={cookieCheckResult === "Cookie 可用" ? "auth-success" : "auth-error"} role="status">{cookieCheckResult}</div>}</div>}
       {showDeleteCookieConfirm && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-cookie-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-cookie-title">确认删除 Cookie</h3><p>删除后将清除当前保存的微博 Cookie，并删除与该 Cookie 关联的任务及任务记录。此操作不可撤销。</p><div className="warning-box">如果还需要这些任务记录，请先取消操作。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteCookieConfirm(false)} disabled={busy}>取消</button><button className="button danger" onClick={() => void deleteCookie()} disabled={busy}>{busy ? "正在删除…" : "确认删除"}</button></div></div></div>}
       <div className="segmented">
         <button className={method === "qr" ? "selected" : ""} onClick={() => { setMethod("qr"); setError(""); }}>扫码登录</button>
@@ -697,17 +739,7 @@ function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => voi
       </div>}
       {error && <div className="auth-error" role="alert">{error}</div>}
     </div>
-    {showQrDialog && <div className="modal-backdrop qr-control-backdrop" role="presentation">
-      <div className="modal qr-control-modal" role="dialog" aria-modal="true" aria-labelledby="qr-control-title">
-        <div className="panel-title"><div><strong id="qr-control-title">微博扫码登录</strong><span>{qrState}</span></div><button className="icon-button" onClick={closeQrDialog} aria-label="关闭扫码登录弹窗"><X size={17}/></button></div>
-        <p>点击下方按钮打开微博官方登录页面。登录完成后，返回此处验证会话；</p>
-        {error && <div className="auth-error" role="alert">{error}</div>}
-        <div className="modal-actions">
-          <button className="button ghost" onClick={closeQrDialog} disabled={busy}>关闭</button>
-          <button className="button primary" onClick={finishQrLogin} disabled={busy}>{busy ? "正在验证…" : "已登录，验证并获取 Cookie"}</button>
-        </div>
-      </div>
-    </div>}
+
   </div>;
 }
 function TaskBadge({ state }: {state: TaskState}) { const cls = state === "已完成" ? "green" : state === "执行中" ? "blue" : state === "失败" ? "red" : state === "等待中" ? "amber" : "neutral"; return <span className={`tag ${cls}`}><span className="tag-dot"/>{state}</span>; }

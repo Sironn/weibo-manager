@@ -330,7 +330,7 @@ pub fn create_delete_task(
         post_ids.len(), date_label, post_type, if keyword.trim().is_empty() { "无" } else { keyword.trim() },
         if skipped > 0 { format!("，已跳过与其他未完成任务重叠的 {} 条微博", skipped) } else { String::new() });
     let task = DeleteTask {
-        id, title: format!("微博删除 · {} 条", post_ids.len()), kind: "删除".into(),
+        id, title: format!("微博删除 {} 条", post_ids.len()), kind: "删除".into(),
         state: "等待中".into(), progress: 0, detail, created_at: created_at.clone(),
         post_ids, date_from, date_to, keyword, post_type, results: Vec::new(),
     };
