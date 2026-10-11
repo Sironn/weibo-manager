@@ -166,8 +166,8 @@ pub async fn ensure_qr_login_controls(app: AppHandle) -> Result<(), String> {
       const root=document.createElement('div');root.id='__wm_qr_controls';
       const label=document.createElement('span');label.textContent='完成扫码后，点击验证并获取 Cookie';
       const verify=document.createElement('button');verify.textContent='已登录，验证并获取 Cookie';
-      verify.onclick=function(){document.title='__WM_VERIFY_QR__';};
-      const close=document.createElement('button');close.className='secondary';close.textContent='关闭';close.onclick=function(){document.title='__WM_CLOSE_QR__';};
+      verify.onclick=function(){window.location.hash='__WM_VERIFY_QR__';};
+      const close=document.createElement('button');close.className='secondary';close.textContent='关闭';close.onclick=function(){window.location.hash='__WM_CLOSE_QR__';};
       root.append(label,verify,close);document.body.appendChild(root);
     })();"#;
     window.eval(script).map_err(|error| format!("无法在微博网页窗口添加验证按钮：{error}"))
@@ -192,6 +192,22 @@ pub async fn show_qr_login_error(app: AppHandle, message: String) -> Result<(), 
 #[tauri::command]
 pub async fn take_qr_login_action(app: AppHandle) -> Result<Option<String>, String> {
     let Some(window) = app.get_webview_window("weibo-login") else { return Ok(None); };
+    // 使用 URL fragment 传递网页按钮动作，避免依赖 WebView 对 document.title 的同步。
+    if let Ok(url) = window.url() {
+        match url.fragment() {
+            Some("__WM_VERIFY_QR__") => {
+                let _ = window.eval("window.location.hash = '';");
+                return Ok(Some("verify".into()));
+            }
+            Some("__WM_CLOSE_QR__") => {
+                let _ = window.eval("window.location.hash = '';");
+                return Ok(Some("close".into()));
+            }
+            _ => {}
+        }
+    }
+
+    // 兼容旧版通过窗口标题传递动作的情况。
     let title = window.title().map_err(|error| format!("读取微博登录窗口标题失败：{error}"))?;
     if title == "__WM_VERIFY_QR__" {
         window.set_title("微博扫码登录").map_err(|error| format!("恢复微博登录窗口标题失败：{error}"))?;
