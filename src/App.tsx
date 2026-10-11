@@ -306,7 +306,7 @@ function App() {
         {postsLoading && <div className="delete-search-status" role="status">{postsPaused ? "读取已暂停。点击“继续读取”后会从当前进度继续。" : "正在读取微博；每获取一条就会追加到列表。"} </div>}
         {!postsLoading && !postsError && filteredPosts.length === 0 && <EmptyState title={posts.length === 0 ? "暂无微博数据" : "没有匹配的微博"} description={posts.length === 0 ? "请确认已登录微博，然后点击刷新微博。" : "尝试调整日期、关键词或微博类型。"}/>}</div>
       </div>
-      {showDeleteConfirm && <div className="modal-backdrop"><div className="modal"><div className="modal-icon warning"><Trash2/></div><h3>确认创建删除任务</h3><p>将创建一个包含 {selectedCount} 条微博的删除任务。创建任务本身不会删除微博；你还需要在任务中心再次确认并启动执行。</p><div className="warning-box">微博删除不可恢复。执行时将逐条请求并记录结果；未能确认成功的项目不会标记为成功。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteConfirm(false)}>返回检查</button><button className="button danger" onClick={() => void createDeleteTask()}>创建待确认任务</button></div></div></div>}
+      {showDeleteConfirm && <div className="modal-backdrop"><div className="modal"><div className="modal-icon warning"><Trash2/></div><h3>确认创建删除任务</h3><p>将创建一个包含 {selectedCount} 条微博的删除任务。创建任务本身不会删除微博，你还需要在任务中心再次确认并启动执行。</p><div className="warning-box">微博删除不可恢复，执行时将逐条请求并记录结果。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteConfirm(false)}>返回检查</button><button className="button danger" onClick={() => void createDeleteTask()}>创建待确认任务</button></div></div></div>}
     </section>;
     if (page === "download") return <section className="page-stack">
       <PageHeading title="媒体下载" />
