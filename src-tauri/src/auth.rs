@@ -233,10 +233,8 @@ pub fn get_weibo_cookie(store: State<'_, SessionStore>) -> Result<Option<String>
     Ok(current.as_ref().map(|session| session.cookie.clone()))
 }
 
-/// 检测当前保存的 Cookie 是否仍可访问微博登录态，不记录 Cookie 内容。
-#[tauri::command]
-pub async fn check_weibo_cookie(store: State<'_, SessionStore>) -> Result<String, String> {
-    let cookie = store.cookie()?;
+/// 统一检测 Cookie 是否仍可访问微博登录态；后续媒体下载也应复用此函数。
+pub(crate) async fn check_cookie_availability(cookie: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .redirect(reqwest::redirect::Policy::limited(5))
@@ -274,6 +272,12 @@ pub async fn check_weibo_cookie(store: State<'_, SessionStore>) -> Result<String
         return Ok("valid".to_string());
     }
     Err("微博响应未能明确确认登录状态，请稍后重试。".to_string())
+}
+
+#[tauri::command]
+pub async fn check_weibo_cookie(store: State<'_, SessionStore>) -> Result<String, String> {
+    let cookie = store.cookie()?;
+    check_cookie_availability(&cookie).await
 }
 
 /// 只向前端返回账号状态，不返回 Cookie 本身。
