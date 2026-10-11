@@ -2,7 +2,7 @@
 //! 本模块仅获取微博、保存待确认任务；不包含任何真实删除请求。
 
 use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -280,6 +280,32 @@ pub fn create_delete_task(
 ) -> Result<DeleteTask, String> {
     if post_ids.is_empty() { return Err("请至少选择一条微博后再创建任务。".into()); }
     if post_ids.iter().any(|id| id.trim().is_empty()) { return Err("选中的微博 ID 无效，请刷新列表后重试。".into()); }
+    let mut db = db_connection(&app)?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| format!("无法锁定删除任务记录：{e}"))?;
+    let mut requested = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for post_id in post_ids {
+        if seen.insert(post_id.clone()) { requested.push(post_id); }
+    }
+    let mut claimed = std::collections::HashSet::new();
+    {
+        let mut statement = tx.prepare("SELECT state, detail FROM tasks WHERE kind='删除' AND state IN ('等待中','执行中','失败','已取消')")
+            .map_err(|e| format!("检查重复删除任务失败：{e}"))?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|e| format!("读取现有删除任务失败：{e}"))?;
+        for row in rows {
+            let (_, serialized) = row.map_err(|e| format!("读取现有删除任务失败：{e}"))?;
+            if let Ok(existing) = serde_json::from_str::<DeleteTask>(&serialized) {
+                claimed.extend(existing.post_ids);
+            }
+        }
+    }
+    let skipped = requested.iter().filter(|post_id| claimed.contains(*post_id)).count();
+    let post_ids: Vec<String> = requested.into_iter().filter(|post_id| !claimed.contains(post_id)).collect();
+    if post_ids.is_empty() {
+        return Err("所选微博都已存在于其他未完成的删除任务中，请先处理或重试原任务。".into());
+    }
     let id = unix_millis();
     let created_at = format!("{id}");
     let date_label = match (date_from.trim().is_empty(), date_to.trim().is_empty()) {
@@ -288,18 +314,19 @@ pub fn create_delete_task(
         (true, false) => format!("截至 {}", date_to),
         (false, false) => format!("{} 至 {}", date_from, date_to),
     };
-    let detail = format!("待确认 · {} 条微博 · 日期 {} · 类型 {} · 关键词 {}",
-        post_ids.len(), date_label, post_type, if keyword.trim().is_empty() { "无" } else { keyword.trim() });
+    let detail = format!("待确认 · {} 条微博 · 日期 {} · 类型 {} · 关键词 {}{}",
+        post_ids.len(), date_label, post_type, if keyword.trim().is_empty() { "无" } else { keyword.trim() },
+        if skipped > 0 { format!(" · 已跳过与其他未完成任务重叠的 {} 条微博", skipped) } else { String::new() });
     let task = DeleteTask {
         id, title: format!("微博删除 · {} 条", post_ids.len()), kind: "删除".into(),
         state: "等待中".into(), progress: 0, detail, created_at: created_at.clone(),
         post_ids, date_from, date_to, keyword, post_type, results: Vec::new(),
     };
-    let db = db_connection(&app)?;
     let serialized = serde_json::to_string(&task).map_err(|e| format!("序列化任务失败：{e}"))?;
-    db.execute("INSERT INTO tasks (id, kind, state, created_at, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
+    tx.execute("INSERT INTO tasks (id, kind, state, created_at, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
         params![task.id.to_string(), "删除", task.state, task.created_at, serialized])
         .map_err(|e| format!("保存删除任务失败：{e}"))?;
+    tx.commit().map_err(|e| format!("提交删除任务失败：{e}"))?;
     Ok(task)
 }
 
@@ -474,6 +501,11 @@ pub fn set_delete_task_paused(paused:bool,control:State<'_,DeleteSearchControl>)
 pub fn set_delete_task_cancelled(cancelled:bool,control:State<'_,DeleteSearchControl>){control.task_cancelled.store(cancelled,Ordering::Relaxed);if cancelled{control.task_paused.store(false,Ordering::Relaxed);}}
 #[tauri::command]
 pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,SessionStore>,control:State<'_,DeleteSearchControl>)->Result<DeleteTask,String>{
+ if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
+ if control.task_running.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err() {
+     return Err("已有删除任务正在执行，请等待当前任务结束。".into());
+ }
+ let _execution_guard = TaskExecutionGuard(&control.task_running);
  let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return Err("任务中没有可删除的微博 ID。".into());}if task.state=="执行中"{return Err("该删除任务已经在执行。".into());}if task.state=="已完成"{return Err("该任务已完成，不能重复执行。".into());}
  control.task_cancelled.store(false,Ordering::Relaxed);control.task_paused.store(false,Ordering::Relaxed);let cookie=store.cookie()?;
  let client=reqwest::Client::builder().timeout(std::time::Duration::from_secs(25)).build().map_err(|e|format!("初始化删除请求失败：{e}"))?;
@@ -481,7 +513,33 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  if !config.status().is_success(){return Err(format!("验证微博会话失败，HTTP {}",config.status().as_u16()));}let json:Value=config.json().await.map_err(|e|format!("解析微博账号信息失败：{e}"))?;
  let uid=json.pointer("/data/uid").and_then(Value::as_u64).map(|v|v.to_string()).or_else(||json.pointer("/data/uid").and_then(Value::as_str).map(str::to_string)).filter(|v|!v.is_empty()&&v!="0").ok_or_else(||"无法识别当前微博 UID，未执行删除。".to_string())?;
  let retry=task.state=="失败"||task.state=="已取消";let successful:std::collections::HashSet<String>=task.results.iter().filter(|r|r.state=="已删除").map(|r|r.post_id.clone()).collect();
- let targets:Vec<String>=if retry{task.post_ids.iter().filter(|id|!successful.contains(*id)).cloned().collect()}else{task.post_ids.clone()};if targets.is_empty(){return Err("该任务没有待重试的失败项目。".into());}
+ let mut claimed=std::collections::HashSet::new();
+ {
+   let db=db_connection(&app)?;
+   let mut statement=db.prepare("SELECT id, detail FROM tasks WHERE kind='删除' AND id<>?1 AND state IN ('等待中','执行中','失败','已取消')")
+     .map_err(|e|format!("执行前检查重复微博失败：{e}"))?;
+   let rows=statement.query_map(params![task.id.to_string()],|row|Ok(row.get::<_,String>(1)?))
+     .map_err(|e|format!("读取其他删除任务失败：{e}"))?;
+   for row in rows {
+     let json=row.map_err(|e|format!("读取其他删除任务失败：{e}"))?;
+     if let Ok(other)=serde_json::from_str::<DeleteTask>(&json){claimed.extend(other.post_ids);}
+   }
+ }
+ let mut targets:Vec<String>=if retry{task.post_ids.iter().filter(|id|!successful.contains(*id)).cloned().collect()}else{task.post_ids.clone()};
+ let overlaps:Vec<String>=targets.iter().filter(|id|claimed.contains(*id)).cloned().collect();
+ targets.retain(|id|!claimed.contains(id));
+ for id in overlaps {
+   task.results.retain(|result|result.post_id!=id);
+   task.results.push(DeletePostResult{post_id:id,state:"跳过重复".into(),detail:"该微博已存在于其他未完成删除任务，本次跳过；重试时会再次检查".into()});
+ }
+ if targets.is_empty() {
+   task.state="失败".into();
+   task.progress=((task.results.len()*100)/task.post_ids.len()).min(100) as u8;
+   task.detail="本次没有可执行的微博：全部项目均已成功删除或与其他未完成任务重叠".into();
+   save_delete_task(&app,&task)?;
+   let _=app.emit("delete-task-updated",task.clone());
+   return Ok(task);
+ }
  let mut id_to_bid=std::collections::HashMap::new();let mut wanted=std::collections::HashSet::new();for id in &targets{let bid=numeric_id_to_bid(id).ok_or_else(||format!("微博 ID 格式无效：{id}"))?;wanted.insert(bid.clone());id_to_bid.insert(id.clone(),bid);}
  task.state="执行中".into();task.progress=((successful.len()*100)/task.post_ids.len()).min(100)as u8;task.detail=format!("正在查找本人微博删除链接，待处理 {} 条",targets.len());if !retry{task.results.clear();}
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());let mut urls=std::collections::HashMap::new();
