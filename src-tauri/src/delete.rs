@@ -299,29 +299,153 @@ fn numeric_id_to_bid(id:&str)->Option<String>{
  let mut left=id;let mut out=Vec::new();while !left.is_empty(){let start=left.len().saturating_sub(7);let mut n=left[start..].parse::<u64>().ok()?;let mut chars=Vec::new();while n>0{chars.push(A[(n%62)as usize]as char);n/=62;}if chars.is_empty(){chars.push('0');}chars.reverse();let mut p:String=chars.into_iter().collect();if start>0{p=format!("{:0>4}",p);}out.insert(0,p);left=&left[..start];}Some(out.concat())
 }
 fn clean_html_text(raw:&str)->String{let mut o=String::new();let mut tag=false;for c in raw.chars(){match c{'<'=>tag=true,'>'=>tag=false,_ if !tag=>o.push(c),_=>{}}}o.replace("&nbsp;"," ").replace("&amp;","&")}
-fn links_for_ids(html:&str,wanted:&std::collections::HashSet<String>)->std::collections::HashMap<String,String>{
- let mut out=std::collections::HashMap::new();let mut cur=0;while let Some(rel)=html[cur..].find("<a"){let s=cur+rel;let Some(te)=html[s..].find('>')else{break};let e=s+te;let Some(cl)=html[e+1..].find("</a>")else{break};let z=e+1+cl;let tag=&html[s..=e];
- if clean_html_text(&html[e+1..z]).trim()=="删除"{if let Some(h)=tag.find("href=\""){let b=h+6;if let Some(n)=tag[b..].find('"'){let mut url=tag[b..b+n].replace("&amp;","&");if url.starts_with('/'){url=format!("https://weibo.cn{url}");}for id in wanted{if url.contains(&format!("id={id}")){out.insert(id.clone(),url.clone());}}}}}
- cur=z+4;if cur>=html.len(){break;}}out
+fn href_from_anchor(tag: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let href_pos = lower.find("href")?;
+    let after_name = &tag[href_pos + 4..];
+    let equal_pos = after_name.find('=')?;
+    let value = after_name[equal_pos + 1..].trim_start();
+    let quote = value.chars().next()?;
+    if quote == '"' || quote == '\'' {
+        let end = value[1..].find(quote)?;
+        Some(value[1..1 + end].replace("&amp;", "&"))
+    } else {
+        let end = value.find(char::is_whitespace).unwrap_or(value.len());
+        Some(value[..end].trim_end_matches('>').replace("&amp;", "&"))
+    }
 }
-fn find_anchor_url(html:&str,wanted:&[&str])->Option<String>{
- let mut cur=0;while let Some(rel)=html[cur..].find("<a"){let s=cur+rel;let e=s+html[s..].find('>')?;let z=e+1+html[e+1..].find("</a>")?;let label=clean_html_text(&html[e+1..z]).trim().to_string();
- if wanted.iter().any(|v|*v==label){let tag=&html[s..=e];if let Some(h)=tag.find("href=\""){let b=h+6;if let Some(n)=tag[b..].find('"'){let mut u=tag[b..b+n].replace("&amp;","&");if u.starts_with('/'){u=format!("https://weibo.cn{u}");}return Some(u);}}}
- cur=z+4;if cur>=html.len(){break;}}None
+fn absolute_weibo_url(url: String) -> String {
+    if url.starts_with('/') { format!("https://weibo.cn{url}") } else { url }
 }
-async fn delete_one(client:&reqwest::Client,url:&str,uid:&str)->Result<(),String>{
- let ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
- let first=client.get(url).header(USER_AGENT,ua).header(REFERER,"https://weibo.cn/").send().await.map_err(|e|format!("请求删除确认页失败：{e}"))?;
- if first.status().as_u16()==401||first.status().as_u16()==403{return Err(format!("HTTP {}：登录失效或触发风控，停止后续删除",first.status().as_u16()));}
- if !first.status().is_success(){return Err(format!("获取删除确认页失败，HTTP {}",first.status().as_u16()));}
- let html=first.text().await.map_err(|e|format!("读取删除确认页失败：{e}"))?;
- let confirm=find_anchor_url(&html,&["确定删除","确认删除"]).ok_or_else(||"未找到确认页的删除链接，未执行最终删除请求".to_string())?;
- let second=client.get(&confirm).header(USER_AGENT,ua).header(REFERER,"https://weibo.cn/").send().await.map_err(|e|format!("发送最终删除请求失败：{e}"))?;
- if second.status().as_u16()==401||second.status().as_u16()==403{return Err(format!("HTTP {}：登录失效或触发风控",second.status().as_u16()));}
- if !second.status().is_success(){return Err(format!("删除请求失败，HTTP {}",second.status().as_u16()));}
- let final_url=second.url().to_string();let body=second.text().await.map_err(|e|format!("读取删除结果失败：{e}"))?;
- if final_url.contains(&format!("/{uid}/profile"))||body.matches(">删除</a>").count()>=2{Ok(())}else{Err("响应页面无法确认删除成功，按失败记录以避免误报".into())}
+fn links_for_ids(html: &str, wanted: &std::collections::HashSet<String>) -> std::collections::HashMap<String,String> {
+    let mut out = std::collections::HashMap::new();
+    let mut cur = 0;
+    while let Some(rel) = html[cur..].find("<a") {
+        let s = cur + rel;
+        let Some(te) = html[s..].find('>') else { break };
+        let e = s + te;
+        let Some(cl) = html[e + 1..].find("</a>") else { break };
+        let z = e + 1 + cl;
+        let tag = &html[s..=e];
+        let label = clean_html_text(&html[e + 1..z]).split_whitespace().collect::<String>();
+        if label == "删除" {
+            if let Some(raw_url) = href_from_anchor(tag) {
+                let url = absolute_weibo_url(raw_url);
+                for id in wanted {
+                    if url.contains(&format!("id={id}")) { out.insert(id.clone(), url.clone()); }
+                }
+            }
+        }
+        cur = z + 4;
+        if cur >= html.len() { break; }
+    }
+    out
 }
+fn find_anchor_url(html: &str, wanted: &[&str]) -> Option<String> {
+    let mut cur = 0;
+    while let Some(rel) = html[cur..].find("<a") {
+        let s = cur + rel;
+        let e = s + html[s..].find('>')?;
+        let z = e + 1 + html[e + 1..].find("</a>")?;
+        let label = clean_html_text(&html[e + 1..z]).split_whitespace().collect::<String>();
+        let is_confirm = wanted.iter().any(|v| label == v)
+            || (!label.contains("取消") && !label.contains("私密")
+                && (label.contains("确定") || label.contains("确认")) && label.contains("删"));
+        if is_confirm {
+            if let Some(url) = href_from_anchor(&html[s..=e]) {
+                return Some(absolute_weibo_url(url));
+            }
+        }
+        cur = z + 4;
+        if cur >= html.len() { break; }
+    }
+    None
+}
+fn find_st_token(html: &str) -> Option<String> {
+    let mut cur = 0;
+    while let Some(rel) = html[cur..].find("<a") {
+        let s = cur + rel;
+        let e = s + html[s..].find('>')?;
+        if let Some(url) = href_from_anchor(&html[s..=e]) {
+            let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
+            for pair in query.split('&') {
+                if let Some((key, value)) = pair.split_once('=') {
+                    if key == "st" && !value.is_empty() { return Some(value.to_string()); }
+                }
+            }
+        }
+        cur = e + 1;
+        if cur >= html.len() { break; }
+    }
+    None
+}
+fn replace_st_token(url: &str, token: &str) -> String {
+    if let Some(pos) = url.find("st=") {
+        let value_start = pos + 3;
+        let value_end = url[value_start..].find('&').map(|n| value_start + n).unwrap_or(url.len());
+        format!("{}{}{}", &url[..value_start], token, &url[value_end..])
+    } else {
+        format!("{}{}st={}", url, if url.contains('?') { "&" } else { "?" }, token)
+    }
+}
+async fn delete_one(client: &reqwest::Client, url: &str, uid: &str, cookie: &str) -> Result<(), String> {
+    let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
+    let mut delete_url = url.to_string();
+    for attempt in 0..2 {
+        let first = client.get(&delete_url)
+            .header(COOKIE, cookie)
+            .header(USER_AGENT, ua)
+            .header(REFERER, format!("https://weibo.cn/{uid}/profile"))
+            .header(ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .send().await.map_err(|e| format!("请求删除确认页失败：{e}"))?;
+        if first.status().as_u16() == 401 || first.status().as_u16() == 403 {
+            return Err(format!("HTTP {}：登录失效或触发风控，停止后续删除", first.status().as_u16()));
+        }
+        if !first.status().is_success() {
+            return Err(format!("获取删除确认页失败，HTTP {}", first.status().as_u16()));
+        }
+        let html = first.text().await.map_err(|e| format!("读取删除确认页失败：{e}"))?;
+        let Some(confirm) = find_anchor_url(&html, &["确定删除", "确认删除"]) else {
+            if attempt == 0 {
+                let profile = client.get(format!("https://weibo.cn/{uid}/profile?page=1"))
+                    .header(COOKIE, cookie).header(USER_AGENT, ua)
+                    .header(REFERER, "https://weibo.cn/")
+                    .send().await.map_err(|e| format!("刷新删除令牌失败：{e}"))?;
+                if profile.status().is_success() {
+                    let profile_html = profile.text().await.map_err(|e| format!("读取新令牌失败：{e}"))?;
+                    if let Some(token) = find_st_token(&profile_html) {
+                        delete_url = replace_st_token(url, &token);
+                        continue;
+                    }
+                }
+            }
+            let preview = clean_html_text(&html);
+            let preview = preview.trim();
+            let summary = preview.chars().take(100).collect::<String>();
+            return Err(format!("未找到确认页的删除链接，未执行最终删除请求。页面内容：{}", if summary.is_empty() { "（空页面）" } else { &summary }));
+        };
+        let second = client.get(&confirm)
+            .header(COOKIE, cookie)
+            .header(USER_AGENT, ua)
+            .header(REFERER, format!("https://weibo.cn/{uid}/profile"))
+            .header(ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .send().await.map_err(|e| format!("发送最终删除请求失败：{e}"))?;
+        if second.status().as_u16() == 401 || second.status().as_u16() == 403 {
+            return Err(format!("HTTP {}：登录失效或触发风控", second.status().as_u16()));
+        }
+        if !second.status().is_success() {
+            return Err(format!("删除请求失败，HTTP {}", second.status().as_u16()));
+        }
+        let final_url = second.url().to_string();
+        let body = second.text().await.map_err(|e| format!("读取删除结果失败：{e}"))?;
+        if final_url.contains(&format!("/{uid}/profile")) || body.matches(">删除</a>").count() >= 2 {
+            return Ok(());
+        }
+        return Err("响应页面无法确认删除成功，按失败记录以避免误报".into());
+    }
+    Err("刷新删除令牌后仍未能确认删除".into())
+}
+
 #[tauri::command]
 pub fn set_delete_task_paused(paused:bool,control:State<'_,DeleteSearchControl>){control.task_paused.store(paused,Ordering::Relaxed);}
 #[tauri::command]
@@ -342,7 +466,7 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  for page in 1..=500{if !wait_delete_resume(&control).await{break;}let response=client.get(format!("https://weibo.cn/{uid}/profile?page={page}")).header(COOKIE,&cookie).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(REFERER,"https://weibo.cn/").send().await.map_err(|e|format!("读取本人微博删除链接失败：{e}"))?;
  if response.status().as_u16()==401||response.status().as_u16()==403{task.state="失败".into();task.detail=format!("读取本人微博主页被拒绝（HTTP {}），尚未执行删除",response.status().as_u16());save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());return Ok(task);}
  if !response.status().is_success(){return Err(format!("读取本人微博主页失败，HTTP {}",response.status().as_u16()));}let html=response.text().await.map_err(|e|format!("读取本人微博主页内容失败：{e}"))?;urls.extend(links_for_ids(&html,&wanted));if urls.len()>=wanted.len()||!html.contains("删除"){break;}task_sleep(crate::settings::request_delay_ms(&app)).await;}
- for id in targets{if !wait_delete_resume(&control).await{break;}let outcome=match id_to_bid.get(&id).and_then(|bid|urls.get(bid)){Some(url)=>delete_one(&client,url,&uid).await,None=>Err("未在本人微博主页中找到该微博的删除链接，未发送删除请求".into())};
+ for id in targets{if !wait_delete_resume(&control).await{break;}let outcome=match id_to_bid.get(&id).and_then(|bid|urls.get(bid)){Some(url)=>delete_one(&client,url,&uid,&cookie).await,None=>Err("未在本人微博主页中找到该微博的删除链接，未发送删除请求".into())};
  let (state,detail)=match outcome{Ok(())=>("已删除".to_string(),"已收到可确认的删除成功页面".to_string()),Err(e)=>("失败".to_string(),e)};let fatal=detail.contains("HTTP 401")||detail.contains("HTTP 403")||detail.contains("风控");
  task.results.retain(|r|r.post_id!=id);task.results.push(DeletePostResult{post_id:id,state,detail});task.progress=((task.results.len()*100)/task.post_ids.len()).min(100)as u8;let ok=task.results.iter().filter(|r|r.state=="已删除").count();let failed=task.results.iter().filter(|r|r.state=="失败").count();task.detail=format!("已处理 {}/{} 条；成功 {} 条，失败 {} 条",task.results.len(),task.post_ids.len(),ok,failed);
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());if fatal{break;}task_sleep(crate::settings::request_delay_ms(&app)).await;}
