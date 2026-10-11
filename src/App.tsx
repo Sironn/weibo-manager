@@ -562,6 +562,7 @@ function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => voi
         <button className="icon-button" onClick={copyCookie} disabled={!savedCookie} title="复制 Cookie" aria-label="复制 Cookie"><Copy size={17}/></button>
         <button className="button ghost" onClick={() => setShowDeleteCookieConfirm(true)} disabled={busy}>删除Cookie</button>
       </div>}
+      <div className="account-actions cookie-check-actions"><button className="button secondary" onClick={() => void checkCookie()} disabled={cookieCheckBusy || !savedCookie}><ShieldCheck size={15}/>{cookieCheckBusy ? "正在检测…" : "检测 Cookie 可用性"}</button></div>
       {cookieCheckResult && <div className={cookieCheckResult === "Cookie 可用" ? "auth-success" : "auth-error"} role="status">{cookieCheckResult}</div>}
       {showDeleteCookieConfirm && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-cookie-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-cookie-title">确认删除 Cookie</h3><p>删除后将清除当前保存的微博 Cookie，并删除与该 Cookie 关联的任务及任务记录。此操作不可撤销。</p><div className="warning-box">如果还需要这些任务记录，请先取消操作。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteCookieConfirm(false)} disabled={busy}>取消</button><button className="button danger" onClick={() => void deleteCookie()} disabled={busy}>{busy ? "正在删除…" : "确认删除"}</button></div></div></div>}
       <div className="segmented">
