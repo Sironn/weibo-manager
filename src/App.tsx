@@ -118,6 +118,7 @@ function App() {
   const selectedTaskCount = selectedTaskIds.filter(id => selectableTaskIds.includes(id)).length;
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
   const resetAfterCookieDeleted = () => {
+    setCookieValidity("invalid");
     deleteSearchGeneration.current += 1;
     activeDeleteSearchGeneration.current = null;
     acceptDeletePostEvents.current = false;
