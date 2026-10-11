@@ -144,3 +144,13 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 /* 工作台与 Cookie 管理内容不足一屏时纵向居中，内容过高时仍从顶部滚动。 */
 .content.content-centered { display:flex; flex-direction:column; }
 .content.content-centered > .page-stack { margin-block:auto; flex:0 0 auto; }
+
+
+/* 已存在 Cookie 的提示沿用页面说明文字的轻量样式，并紧跟对应操作按钮。 */
+.account-actions { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+.cookie-lock-note { display:inline-flex; align-items:center; color:var(--muted); font-size:10px; line-height:1.6; }
+
+/* 图标按钮悬停时显示轻量功能提示。 */
+.cookie-actions .icon-tooltip { position:relative; width:34px; height:34px; padding:0; flex-shrink:0; }
+.cookie-actions .icon-tooltip::after { content:attr(data-tooltip); position:absolute; z-index:30; left:50%; bottom:calc(100% + 7px); transform:translate(-50%,3px); padding:5px 8px; border-radius:5px; background:#27324a; color:#fff; font-size:10px; font-weight:500; line-height:1.4; white-space:nowrap; pointer-events:none; opacity:0; visibility:hidden; transition:opacity .12s ease,transform .12s ease,visibility .12s ease; }
+.cookie-actions .icon-tooltip:hover::after,.cookie-actions .icon-tooltip:focus-visible::after { opacity:1; visibility:visible; transform:translate(-50%,0); }

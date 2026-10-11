@@ -726,10 +726,10 @@ function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (m
         <div className="avatar"><LockKeyhole size={17}/></div>
         <div className="user-info cookie-value"><strong>微博 Cookie</strong><span>{showCookie ? savedCookie : "••••••••••••••••"}</span></div>
         <div className="cookie-actions">
-          <button className="button ghost" onClick={() => setShowCookie(value => !value)} disabled={!hasSavedCookie || busy}>{showCookie ? <EyeOff size={15}/> : <Eye size={15}/>} {showCookie ? "隐藏 Cookie" : "显示 Cookie"}</button>
-          <button className="button ghost" onClick={copyCookie} disabled={!hasSavedCookie || busy}><Copy size={15}/> 复制 Cookie</button>
-          <button className="button secondary" onClick={() => void checkCookie()} disabled={cookieCheckBusy || busy || !hasSavedCookie}><ShieldCheck size={15}/>{cookieCheckBusy ? "正在检测…" : "检测 Cookie 可用性"}</button>
-          <button className="button danger" onClick={() => setShowDeleteCookieConfirm(true)} disabled={busy}><Trash2 size={15}/> 删除 Cookie</button>
+          <button className="button ghost icon-tooltip" data-tooltip={showCookie ? "隐藏 Cookie" : "显示 Cookie"} aria-label={showCookie ? "隐藏 Cookie" : "显示 Cookie"} onClick={() => setShowCookie(value => !value)} disabled={!hasSavedCookie || busy}>{showCookie ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
+          <button className="button ghost icon-tooltip" data-tooltip="复制 Cookie" aria-label="复制 Cookie" onClick={copyCookie} disabled={!hasSavedCookie || busy}><Copy size={17}/></button>
+          <button className="button secondary icon-tooltip" data-tooltip={cookieCheckBusy ? "正在检测…" : "检测 Cookie 可用性"} aria-label="检测 Cookie 可用性" onClick={() => void checkCookie()} disabled={cookieCheckBusy || busy || !hasSavedCookie}><ShieldCheck size={17}/></button>
+          <button className="button danger icon-tooltip" data-tooltip="删除 Cookie" aria-label="删除 Cookie" onClick={() => setShowDeleteCookieConfirm(true)} disabled={busy}><Trash2 size={17}/></button>
         </div>
       </div>}
       {hasSavedCookie && cookieCheckResult && <div className={`cookie-validity-message ${cookieCheckResult === "Cookie 可用" ? "auth-success" : "auth-error"}`} role="status">{cookieCheckResult}</div>}
@@ -742,17 +742,20 @@ function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (m
         <div className="qr-placeholder"><div className="qr-inner"><div className="qr-corner tl"/><div className="qr-corner tr"/><div className="qr-corner bl"/><div className="qr-pattern">{Array.from({length: 49}, (_, i) => <i key={i} style={{opacity: ((i * 17 + 5) % 11) > 3 ? 1 : .12}}/>)}</div></div><div className="qr-overlay"><LockKeyhole size={20}/></div></div>
         <div className="qr-copy">
           <h3>{qrState}</h3>
-          <p>点击下方按钮打开微博官方登录页面。登录完成后，返回此处验证会话；</p>
+          <p>点击下方按钮打开微博官方登录页面。登录完成后，返回此处验证会话。</p>
           <div className="account-actions">
             <button className="button secondary" onClick={startQrLogin} disabled={cookieLocked || busy}><RefreshCw size={15}/> 打开微博扫码登录</button>
+            {cookieExists && <span className="cookie-lock-note">已存在 Cookie，请先删除</span>}
           </div>
         </div>
       </div> : <div className="cookie-import">
         <Field label="微博 Cookie"><textarea rows={5} placeholder="粘贴本人微博登录后的 Cookie 请求头内容" value={cookie} onChange={e => setCookie(e.target.value)} disabled={cookieLocked || busy} autoComplete="off" /></Field>
         <div className="inline-note"><LockKeyhole size={16}/> {cookieStorageNote}</div>
-        <button className="button primary" onClick={importCookie} disabled={cookieLocked || busy}>保存 Cookie</button>
+        <div className="account-actions">
+          <button className="button primary" onClick={importCookie} disabled={cookieLocked || busy}>保存 Cookie</button>
+          {cookieExists && <span className="cookie-lock-note">已存在 Cookie，请先删除</span>}
+        </div>
       </div>}
-      {cookieExists && <div className="cookie-lock-note">已存在 Cookie，请先删除</div>}
       {error && (method === "cookie" || !showQrDialog) && <div className="auth-error" role="alert">{error}</div>}
     </div>
 
