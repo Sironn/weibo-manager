@@ -293,7 +293,7 @@ function App() {
   };
   const renderPage = () => {
     if (page === "dashboard") return <Dashboard tasks={tasks} go={setPage} />;
-    if (page === "accounts") return <Accounts notify={notify} />;
+    if (page === "accounts") return <Accounts notify={notify} onCookieDeleted={() => setTasks([])} />;
     if (page === "delete") return <section className="page-stack">
       <PageHeading title="微博删除" />
       <div className="panel filter-panel">
@@ -393,11 +393,12 @@ function Dashboard({ tasks, go }: {tasks: Task[]; go: (page: Page) => void}) {
 }
 type WeiboAccount = { uid: string; screenName: string; avatarUrl?: string | null };
 
-function Accounts({ notify }: {notify: (message: string) => void}) {
+function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => void; onCookieDeleted: () => void}) {
   const [method, setMethod] = useState<"qr" | "cookie">("qr");
   const [cookie, setCookie] = useState("");
   const [savedCookie, setSavedCookie] = useState("");
   const [showCookie, setShowCookie] = useState(false);
+  const [showDeleteCookieConfirm, setShowDeleteCookieConfirm] = useState(false);
   const [showQrDialog, setShowQrDialog] = useState(false);
   const [configFileNames, setConfigFileNames] = useState<{ cookieFile: string; windowSizeFile: string } | null>(null);
   const [qrState, setQrState] = useState("获取Cookie");
@@ -517,11 +518,11 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
     }
   };
 
-  const logout = async () => {
+  const deleteCookie = async () => {
     setBusy(true);
     setError("");
     try {
-      await invoke("logout_weibo");
+      await invoke("delete_weibo_cookie");
       setAccount(null);
       setQrState("获取Cookie");
       setCookie("");
@@ -559,9 +560,10 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
         <div className="user-info cookie-value"><strong>微博 Cookie</strong><span>{showCookie ? savedCookie : "••••••••••••••••"}</span></div>
         <button className="icon-button" onClick={() => setShowCookie(value => !value)} title={showCookie ? "隐藏 Cookie" : "显示 Cookie"} aria-label={showCookie ? "隐藏 Cookie" : "显示 Cookie"} disabled={!savedCookie}>{showCookie ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
         <button className="icon-button" onClick={copyCookie} disabled={!savedCookie} title="复制 Cookie" aria-label="复制 Cookie"><Copy size={17}/></button>
-        <button className="button ghost" onClick={logout} disabled={busy}>删除Cookie</button>
+        <button className="button ghost" onClick={() => setShowDeleteCookieConfirm(true)} disabled={busy}>删除Cookie</button>
       </div>}
       {cookieCheckResult && <div className={cookieCheckResult === "Cookie 可用" ? "auth-success" : "auth-error"} role="status">{cookieCheckResult}</div>}
+      {showDeleteCookieConfirm && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-cookie-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-cookie-title">确认删除 Cookie</h3><p>删除后将清除当前保存的微博 Cookie，并删除与该 Cookie 关联的任务及任务记录。此操作不可撤销。</p><div className="warning-box">如果还需要这些任务记录，请先取消操作。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteCookieConfirm(false)} disabled={busy}>取消</button><button className="button danger" onClick={() => void deleteCookie()} disabled={busy}>{busy ? "正在删除…" : "确认删除"}</button></div></div></div>}
       <div className="segmented">
         <button className={method === "qr" ? "selected" : ""} onClick={() => { setMethod("qr"); setError(""); }}>扫码登录</button>
         <button className={method === "cookie" ? "selected" : ""} onClick={() => { setMethod("cookie"); setError(""); }}>导入 Cookie</button>

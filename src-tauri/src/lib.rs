@@ -50,7 +50,7 @@ pub fn run() {
             auth::get_weibo_account,
             auth::get_weibo_cookie,
             auth::check_weibo_cookie,
-            auth::logout_weibo,
+            auth::delete_weibo_cookie,
             delete::get_delete_posts,
             delete::set_delete_search_paused,
             delete::set_delete_search_cancelled,

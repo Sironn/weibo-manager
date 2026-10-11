@@ -5,6 +5,7 @@
 //! 应由后续下载接口的实际响应判断。
 
 use reqwest::header::{ACCEPT, COOKIE, USER_AGENT};
+use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -283,17 +284,46 @@ pub fn get_weibo_account(store: State<'_, SessionStore>) -> Result<Option<WeiboA
 }
 
 #[tauri::command]
-pub fn logout_weibo(
+pub async fn delete_weibo_cookie(
     app: AppHandle,
     store: State<'_, SessionStore>,
+    control: State<'_, crate::delete::DeleteSearchControl>,
 ) -> Result<(), String> {
-    let _ = write_log(&app, "INFO", "auth", "用户删除保存的 Cookie");
-    persist_cookie(&app, None)?;
-    let mut current = store.0.lock().map_err(|_| "清理认证状态失败，请重启应用后重试。".to_string())?;
-    *current = None;
-    drop(current);
-    if let Some(window) = app.get_webview_window("weibo-login") {
-        let _ = window.close();
-    }
-    Ok(())
+    crate::delete::begin_cookie_removal(&control).await;
+    let result = (|| -> Result<(), String> {
+        let _ = write_log(&app, "INFO", "auth", "用户请求删除 Cookie 及关联任务");
+        let previous_cookie = {
+            let current = store.0.lock().map_err(|_| "读取认证状态失败，请重启应用后重试。".to_string())?;
+            current.as_ref().map(|session| session.cookie.clone())
+        };
+
+        let data_dir = app.path().app_data_dir().map_err(|error| format!("无法定位应用数据目录：{error}"))?;
+        std::fs::create_dir_all(&data_dir).map_err(|error| format!("无法创建应用数据目录：{error}"))?;
+        let mut db = Connection::open(data_dir.join("weibo-manager.sqlite3"))
+            .map_err(|error| format!("无法打开任务数据库：{error}"))?;
+        db.execute_batch("CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, detail TEXT NOT NULL);")
+            .map_err(|error| format!("初始化任务表失败：{error}"))?;
+
+        let tx = db.transaction().map_err(|error| format!("无法开始任务清理事务：{error}"))?;
+        tx.execute("DELETE FROM tasks", [])
+            .map_err(|error| format!("删除 Cookie 关联任务失败：{error}"))?;
+        persist_cookie(&app, None)?;
+        if let Err(error) = tx.commit() {
+            if let Some(cookie) = previous_cookie.as_deref() {
+                let _ = persist_cookie(&app, Some(cookie));
+            }
+            return Err(format!("清理任务记录失败，已尝试恢复 Cookie：{error}"));
+        }
+
+        let mut current = store.0.lock().map_err(|_| "清理认证状态失败，请重启应用后重试。".to_string())?;
+        *current = None;
+        drop(current);
+        if let Some(window) = app.get_webview_window("weibo-login") {
+            let _ = window.close();
+        }
+        let _ = write_log(&app, "INFO", "auth", "Cookie 与关联任务已删除");
+        Ok(())
+    })();
+    crate::delete::finish_cookie_removal(&control);
+    result
 }

@@ -116,6 +116,27 @@ pub struct DeleteSearchControl {
     cancelled: AtomicBool,
     task_paused: AtomicBool,
     task_cancelled: AtomicBool,
+    task_running: AtomicBool,
+    cookie_removal: AtomicBool,
+}
+
+struct TaskExecutionGuard<'a>(&'a AtomicBool);
+impl Drop for TaskExecutionGuard<'_> {
+    fn drop(&mut self) { self.0.store(false, Ordering::Release); }
+}
+
+pub(crate) async fn begin_cookie_removal(control: &DeleteSearchControl) {
+    control.cookie_removal.store(true, Ordering::Release);
+    control.task_cancelled.store(true, Ordering::Release);
+    control.task_paused.store(false, Ordering::Release);
+    while control.task_running.load(Ordering::Acquire) {
+        task_sleep(100).await;
+    }
+}
+
+pub(crate) fn finish_cookie_removal(control: &DeleteSearchControl) {
+    control.task_cancelled.store(false, Ordering::Release);
+    control.cookie_removal.store(false, Ordering::Release);
 }
 #[tauri::command]
 pub fn set_delete_search_paused(paused: bool, control: State<'_, DeleteSearchControl>) {
