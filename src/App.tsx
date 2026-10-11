@@ -403,6 +403,8 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
   const [qrState, setQrState] = useState("获取Cookie");
   const [account, setAccount] = useState<WeiboAccount | null>(null);
   const [busy, setBusy] = useState(false);
+  const [cookieCheckBusy, setCookieCheckBusy] = useState(false);
+  const [cookieCheckResult, setCookieCheckResult] = useState("");
   const [error, setError] = useState("");
 
   // 仅为用户提供显示/复制功能而读取已保存的 Cookie；不写入日志。
@@ -501,6 +503,20 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
     }
   };
 
+  const checkCookie = async () => {
+    setCookieCheckBusy(true);
+    setCookieCheckResult("正在检测…");
+    setError("");
+    try {
+      const result = await invoke<string>("check_weibo_cookie");
+      setCookieCheckResult(result === "valid" ? "Cookie 可用" : "Cookie 已失效");
+    } catch (reason) {
+      setCookieCheckResult(`检测失败：${String(reason)}`);
+    } finally {
+      setCookieCheckBusy(false);
+    }
+  };
+
   const logout = async () => {
     setBusy(true);
     setError("");
@@ -545,6 +561,7 @@ function Accounts({ notify }: {notify: (message: string) => void}) {
         <button className="icon-button" onClick={copyCookie} disabled={!savedCookie} title="复制 Cookie" aria-label="复制 Cookie"><Copy size={17}/></button>
         <button className="button ghost" onClick={logout} disabled={busy}>退出登录</button>
       </div>}
+      {cookieCheckResult && <div className={cookieCheckResult === "Cookie 可用" ? "auth-success" : "auth-error"} role="status">{cookieCheckResult}</div>}
       <div className="segmented">
         <button className={method === "qr" ? "selected" : ""} onClick={() => { setMethod("qr"); setError(""); }}>扫码登录</button>
         <button className={method === "cookie" ? "selected" : ""} onClick={() => { setMethod("cookie"); setError(""); }}>导入 Cookie</button>

@@ -4,6 +4,7 @@
 //! 并仅在用户主动查看时通过专用命令返回前端；Cookie 是否仍可用于具体下载请求，
 //! 应由后续下载接口的实际响应判断。
 
+use reqwest::header::{ACCEPT, COOKIE, USER_AGENT};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -231,6 +232,49 @@ pub fn get_weibo_cookie(store: State<'_, SessionStore>) -> Result<Option<String>
     Ok(current.as_ref().map(|session| session.cookie.clone()))
 }
 
+/// 检测当前保存的 Cookie 是否仍可访问微博登录态，不记录 Cookie 内容。
+#[tauri::command]
+pub async fn check_weibo_cookie(store: State<'_, SessionStore>) -> Result<String, String> {
+    let cookie = store.cookie()?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|error| format!("创建 Cookie 检测请求失败：{error}"))?;
+    let response = client
+        .get("https://weibo.cn/")
+        .header(ACCEPT, "text/html,application/xhtml+xml")
+        .header(COOKIE, cookie)
+        .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36")
+        .send()
+        .await
+        .map_err(|error| format!("网络请求失败：{error}"))?;
+
+    let status = response.status();
+    if status.as_u16() == 401 {
+        return Ok("invalid".to_string());
+    }
+    if status.as_u16() == 403 || status.as_u16() == 429 {
+        return Err(format!("微博返回 HTTP {}，暂时无法判断 Cookie 状态。", status.as_u16()));
+    }
+    if !status.is_success() {
+        return Err(format!("微博返回 HTTP {}，检测失败。", status.as_u16()));
+    }
+
+    let final_url = response.url().as_str().to_ascii_lowercase();
+    let body = response.text().await
+        .map_err(|error| format!("读取微博响应失败：{error}"))?;
+    let body_lower = body.to_ascii_lowercase();
+    if final_url.contains("login") || final_url.contains("passport") ||
+        body.contains("请先登录") || body.contains("登录后") {
+        return Ok("invalid".to_string());
+    }
+    if body_lower.contains("logout.php") || body.contains("退出") {
+        return Ok("valid".to_string());
+    }
+    Err("微博响应未能明确确认登录状态，请稍后重试。".to_string())
+}
+
 /// 只向前端返回账号状态，不返回 Cookie 本身。
 #[tauri::command]
 pub fn get_weibo_account(store: State<'_, SessionStore>) -> Result<Option<WeiboAccount>, String> {
@@ -243,7 +287,7 @@ pub fn logout_weibo(
     app: AppHandle,
     store: State<'_, SessionStore>,
 ) -> Result<(), String> {
-    let _ = write_log(&app, "INFO", "auth", "用户退出微博账号");
+    let _ = write_log(&app, "INFO", "auth", "用户删除保存的 Cookie");
     persist_cookie(&app, None)?;
     let mut current = store.0.lock().map_err(|_| "清理认证状态失败，请重启应用后重试。".to_string())?;
     *current = None;
