@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { initializeLogger, log, updateLoggerEnabled } from "./lib/logger";
@@ -67,6 +67,7 @@ function App() {
   const [appliedDateTo, setAppliedDateTo] = useState("");
   const [appliedKeyword, setAppliedKeyword] = useState("");
   const [posts, setPosts] = useState<WeiboPost[]>([]);
+  const acceptDeletePostEvents = useRef(true);
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState("");
   const [postsPaused, setPostsPaused] = useState(false);
@@ -106,6 +107,27 @@ function App() {
   const previewFoldername = buildFolderName(filenameSettings.folderTemplate, previewValues);
   const selectedCount = posts.filter(post => postChecks[post.id]).length;
   const notify = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2600); };
+  const resetAfterCookieDeleted = () => {
+    acceptDeletePostEvents.current = false;
+    setPostsLoading(false);
+    setPosts([]);
+    setPostChecks({});
+    setPostsError("");
+    setPostsPaused(false);
+    setPostsCancelling(false);
+    setDateFrom("");
+    setDateTo("");
+    setKeyword("");
+    setAppliedDateFrom("");
+    setAppliedDateTo("");
+    setAppliedKeyword("");
+    setPostType("全部类型");
+    setAppliedPostType("全部类型");
+    setShowDeleteConfirm(false);
+    setDeleteActionTask(null);
+    setMoreTask(null);
+    setTasks([]);
+  };
   const refreshDeleteTasks = async (showSuccess = false) => {
     try {
       const saved = await invoke<PersistedDeleteTask[]>("get_delete_tasks");
@@ -115,6 +137,7 @@ function App() {
   };
   const loadDeletePosts = async (fromDate = appliedDateFrom) => {
     if (postsLoading) return;
+    acceptDeletePostEvents.current = true;
     setPostsLoading(true); setPostsError(""); setPostsPaused(false); setPostsCancelling(false);
     log("info", "delete", `开始搜索微博，起始日期：${fromDate || "不限"}`);
     setPosts([]); setPostChecks({});
@@ -194,20 +217,7 @@ function App() {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     void listen("cookie-deleted", () => {
-      setTasks([]);
-      setPosts([]);
-      setPostChecks({});
-      setPostsError("");
-      setPostsPaused(false);
-      setPostsCancelling(false);
-      setDateFrom("");
-      setDateTo("");
-      setKeyword("");
-      setAppliedDateFrom("");
-      setAppliedDateTo("");
-      setAppliedKeyword("");
-      setPostType("全部类型");
-      setAppliedPostType("全部类型");
+      resetAfterCookieDeleted();
     }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(reason => {
       log("error", "auth", `注册 Cookie 删除同步监听失败：${String(reason)}`);
     });
@@ -236,6 +246,7 @@ function App() {
         log("error", "delete", `收到微博逐条展示事件，但 payload 不是对象：${String(payload)}`);
         return;
       }
+      if (!acceptDeletePostEvents.current) return;
       const candidate = payload as Partial<WeiboPost>;
       if (typeof candidate.id !== "string" || !candidate.id) {
         log("error", "delete", `收到微博逐条展示事件，但 payload 缺少有效 id；字段：${Object.keys(payload).join(", ")}`);
@@ -315,7 +326,7 @@ function App() {
   };
   const renderPage = () => {
     if (page === "dashboard") return <Dashboard tasks={tasks} go={setPage} />;
-    if (page === "accounts") return <Accounts notify={notify} onCookieDeleted={() => setTasks([])} />;
+    if (page === "accounts") return <Accounts notify={notify} onCookieDeleted={resetAfterCookieDeleted} />;
     if (page === "delete") return <section className="page-stack">
       <PageHeading title="微博删除" />
       <div className="panel filter-panel">
@@ -395,7 +406,7 @@ function App() {
         </section>
       </div>
     </section>;
-    return <section className="page-stack"><PageHeading title="Cookie 管理" subtitle="扫码登录或导入 Cookie" /><Accounts notify={notify} onCookieDeleted={() => setTasks([])} /></section>;
+    return <section className="page-stack"><PageHeading title="Cookie 管理" subtitle="扫码登录或导入 Cookie" /><Accounts notify={notify} onCookieDeleted={resetAfterCookieDeleted} /></section>;
   };
   // 应用外壳固定视口尺寸，滚动仅交由右侧内容区处理。
   return <div className={dark ? "app-shell dark" : "app-shell"}>
