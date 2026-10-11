@@ -365,7 +365,15 @@ function App() {
       setShowDeleteConfirm(false);
       setPage("tasks");
       notify("删除任务已保存。请在任务中心再次确认后执行。");
-    } catch (reason) { notify(`创建任务失败：${String(reason)}`); }
+    } catch (reason) {
+      const message = String(reason);
+      if (message.includes("所选微博都已存在于其他未完成的删除任务中")) {
+        setShowDeleteConfirm(false);
+        notify("所选微博都已存在于任务中，无需重复创建。");
+        return;
+      }
+      notify(`创建任务失败：${message}`);
+    }
   };
   const saveFilenameSettings = (next: FilenameSettings) => {
     setFilenameSettings(next);
