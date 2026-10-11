@@ -527,6 +527,9 @@ function Accounts({ notify, onCookieDeleted }: {notify: (message: string) => voi
       setCookie("");
       setSavedCookie("");
       setShowCookie(false);
+      setCookieCheckResult("");
+      setShowDeleteCookieConfirm(false);
+      onCookieDeleted();
       notify("已删除保存的 Cookie。");
     } catch (reason) {
       setError(String(reason));
