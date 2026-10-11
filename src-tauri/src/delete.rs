@@ -422,7 +422,8 @@ async fn delete_one(client: &reqwest::Client, url: &str, uid: &str, cookie: &str
             let preview = clean_html_text(&html);
             let preview = preview.trim();
             let summary = preview.chars().take(100).collect::<String>();
-            return Err(format!("未找到确认页的删除链接，未执行最终删除请求。页面内容：{}", if summary.is_empty() { "（空页面）" } else { &summary }));
+            let summary = if summary.is_empty() { "（空页面）".to_string() } else { summary };
+            return Err(format!("未找到确认页的删除链接，未执行最终删除请求。页面内容：{}", summary));
         };
         let second = client.get(&confirm)
             .header(COOKIE, cookie)
