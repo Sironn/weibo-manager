@@ -551,6 +551,10 @@ function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (m
   const [configFileNames, setConfigFileNames] = useState<{ cookieFile: string; windowSizeFile: string } | null>(null);
   const [qrState, setQrState] = useState("获取Cookie");
   const [account, setAccount] = useState<WeiboAccount | null>(null);
+  const [cookieLoaded, setCookieLoaded] = useState(false);
+  const hasSavedCookie = Boolean(savedCookie.trim());
+  const cookieExists = hasSavedCookie || Boolean(account);
+  const cookieLocked = !cookieLoaded || cookieExists;
   const [busy, setBusy] = useState(false);
   const [cookieCheckBusy, setCookieCheckBusy] = useState(false);
   const [cookieCheckResult, setCookieCheckResult] = useState("");
@@ -569,6 +573,8 @@ function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (m
     }).catch(() => {
       setAccount(null);
       setSavedCookie("");
+    }).finally(() => {
+      setCookieLoaded(true);
     });
   }, []);
 
@@ -713,8 +719,8 @@ function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (m
   return <div className="page-stack">
     <div className="panel account-panel">
       <div className="panel-title">
-        <div><strong>{account ? "Cookie 已保存" : "保存 Cookie"}</strong><span>扫码登录或导入 Cookie</span></div>
-        <span className={`tag ${account ? "green" : "neutral"}`}>{account ? "已保存" : "未获取"}</span>
+        <div><strong>{cookieExists ? "Cookie 已保存" : "保存 Cookie"}</strong><span>扫码登录或导入 Cookie</span></div>
+        <span className={`tag ${cookieExists ? "green" : "neutral"}`}>{cookieExists ? "已保存" : "未获取"}</span>
       </div>
       {account && <div className="connected-account">
         <div className="avatar"><LockKeyhole size={17}/></div>
@@ -736,14 +742,15 @@ function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (m
           <h3>{qrState}</h3>
           <p>点击下方按钮打开微博官方登录页面。登录完成后，返回此处验证会话；</p>
           <div className="account-actions">
-            <button className="button secondary" onClick={startQrLogin} disabled={busy}><RefreshCw size={15}/> 打开微博扫码登录</button>
+            <button className="button secondary" onClick={startQrLogin} disabled={cookieLocked || busy}><RefreshCw size={15}/> 打开微博扫码登录</button>
           </div>
         </div>
       </div> : <div className="cookie-import">
-        <Field label="微博 Cookie"><textarea rows={5} placeholder="粘贴本人微博登录后的 Cookie 请求头内容" value={cookie} onChange={e => setCookie(e.target.value)} autoComplete="off" /></Field>
+        <Field label="微博 Cookie"><textarea rows={5} placeholder="粘贴本人微博登录后的 Cookie 请求头内容" value={cookie} onChange={e => setCookie(e.target.value)} disabled={cookieLocked || busy} autoComplete="off" /></Field>
         <div className="inline-note"><LockKeyhole size={16}/> {cookieStorageNote}</div>
-        <button className="button primary" onClick={importCookie} disabled={busy}>保存 Cookie</button>
+        <button className="button primary" onClick={importCookie} disabled={cookieLocked || busy}>保存 Cookie</button>
       </div>}
+      {cookieExists && <div className="cookie-lock-note">已存在 Cookie，请先删除</div>}
       {error && (method === "cookie" || !showQrDialog) && <div className="auth-error" role="alert">{error}</div>}
     </div>
 
