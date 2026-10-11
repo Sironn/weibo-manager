@@ -142,6 +142,14 @@ function App() {
     log("info", "delete", `开始搜索微博，起始日期：${fromDate || "不限"}`);
     setPosts([]); setPostChecks({});
     try {
+      const savedCookie = await invoke<string | null>("get_weibo_cookie");
+      if (!savedCookie || !savedCookie.trim()) {
+        throw "尚未登录微博，请先扫码登录或导入 Cookie。";
+      }
+      const cookieStatus = await invoke<string>("check_weibo_cookie");
+      if (cookieStatus !== "valid") {
+        throw "Cookie 已失效，请先重新登录微博或导入有效 Cookie。";
+      }
       await invoke("set_delete_search_cancelled", { cancelled: false });
       await invoke("set_delete_search_paused", { paused: false });
       const result = await invoke<WeiboPost[]>("get_delete_posts", { dateFrom: fromDate });
@@ -155,7 +163,7 @@ function App() {
       log("info", "delete", `微博搜索完成，后端返回 ${result.length} 条结果`);
     } catch (reason) {
       log("error", "delete", `微博搜索失败：${String(reason)}`);
-      setPostsError(String(reason));
+      setPostsError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setPostsLoading(false);
       setPostsPaused(false);
