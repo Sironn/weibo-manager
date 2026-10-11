@@ -348,7 +348,7 @@ fn find_anchor_url(html: &str, wanted: &[&str]) -> Option<String> {
         let e = s + html[s..].find('>')?;
         let z = e + 1 + html[e + 1..].find("</a>")?;
         let label = clean_html_text(&html[e + 1..z]).split_whitespace().collect::<String>();
-        let is_confirm = wanted.iter().any(|v| label == v)
+        let is_confirm = wanted.iter().any(|v| label == *v)
             || (!label.contains("取消") && !label.contains("私密")
                 && (label.contains("确定") || label.contains("确认")) && label.contains("删"));
         if is_confirm {
