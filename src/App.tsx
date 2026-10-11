@@ -373,7 +373,7 @@ function App() {
         </section>
       </div>
     </section>;
-    return <section className="page-stack"><PageHeading title="Cookie 管理" subtitle="扫码登录或导入 Cookie" /><Accounts notify={notify}/></section>;
+    return <section className="page-stack"><PageHeading title="Cookie 管理" subtitle="扫码登录或导入 Cookie" /><Accounts notify={notify} onCookieDeleted={() => setTasks([])} /></section>;
   };
   // 应用外壳固定视口尺寸，滚动仅交由右侧内容区处理。
   return <div className={dark ? "app-shell dark" : "app-shell"}>
