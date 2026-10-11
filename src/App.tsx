@@ -722,15 +722,17 @@ function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (m
         <div><strong>{cookieExists ? "Cookie 已保存" : "保存 Cookie"}</strong><span>扫码登录或导入 Cookie</span></div>
         <span className={`tag ${cookieExists ? "green" : "neutral"}`}>{cookieExists ? "已保存" : "未获取"}</span>
       </div>
-      {account && <div className="connected-account">
+      {cookieExists && <div className="connected-account">
         <div className="avatar"><LockKeyhole size={17}/></div>
         <div className="user-info cookie-value"><strong>微博 Cookie</strong><span>{showCookie ? savedCookie : "••••••••••••••••"}</span></div>
-        <button className="icon-button" onClick={() => setShowCookie(value => !value)} title={showCookie ? "隐藏 Cookie" : "显示 Cookie"} aria-label={showCookie ? "隐藏 Cookie" : "显示 Cookie"} disabled={!savedCookie}>{showCookie ? <EyeOff size={17}/> : <Eye size={17}/>}</button>
-        <button className="icon-button" onClick={copyCookie} disabled={!savedCookie} title="复制 Cookie" aria-label="复制 Cookie"><Copy size={17}/></button>
-        <button className="button ghost" onClick={() => setShowDeleteCookieConfirm(true)} disabled={busy}>删除 Cookie</button>
+        <div className="cookie-actions">
+          <button className="button ghost" onClick={() => setShowCookie(value => !value)} disabled={!hasSavedCookie || busy}>{showCookie ? <EyeOff size={15}/> : <Eye size={15}/>} {showCookie ? "隐藏 Cookie" : "显示 Cookie"}</button>
+          <button className="button ghost" onClick={copyCookie} disabled={!hasSavedCookie || busy}><Copy size={15}/> 复制 Cookie</button>
+          <button className="button secondary" onClick={() => void checkCookie()} disabled={cookieCheckBusy || busy || !hasSavedCookie}><ShieldCheck size={15}/>{cookieCheckBusy ? "正在检测…" : "检测 Cookie 可用性"}</button>
+          <button className="button danger" onClick={() => setShowDeleteCookieConfirm(true)} disabled={busy}><Trash2 size={15}/> 删除 Cookie</button>
+        </div>
       </div>}
-      <div className="cookie-validity-row"><button className="button secondary" onClick={() => void checkCookie()} disabled={cookieCheckBusy || !savedCookie}><ShieldCheck size={15}/>{cookieCheckBusy ? "正在检测…" : "检测 Cookie 可用性"}</button></div>
-      {cookieCheckResult && <div className={`cookie-validity-message ${cookieCheckResult === "Cookie 可用" ? "auth-success" : "auth-error"}`} role="status">{cookieCheckResult}</div>}
+      {hasSavedCookie && cookieCheckResult && <div className={`cookie-validity-message ${cookieCheckResult === "Cookie 可用" ? "auth-success" : "auth-error"}`} role="status">{cookieCheckResult}</div>}
       {showDeleteCookieConfirm && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-cookie-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-cookie-title">确认删除 Cookie</h3><p>删除后将清除当前保存的微博 Cookie，并删除与该 Cookie 关联的任务及任务记录。此操作不可撤销。</p><div className="warning-box">如果还需要这些任务记录，请先取消操作。</div><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteCookieConfirm(false)} disabled={busy}>取消</button><button className="button danger" onClick={() => void deleteCookie()} disabled={busy}>{busy ? "正在删除…" : "确认删除"}</button></div></div></div>}
       <div className="segmented">
         <button className={method === "qr" ? "selected" : ""} onClick={() => { setMethod("qr"); setError(""); }}>扫码登录</button>
