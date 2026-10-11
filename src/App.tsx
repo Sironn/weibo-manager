@@ -635,12 +635,6 @@ function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (m
     }
   };
 
-  const closeQrDialog = async () => {
-    try { await invoke("close_qr_login_window"); }
-    catch (reason) { setError(String(reason)); }
-    finally { setShowQrDialog(false); setError(""); if (!savedCookie) setQrState("获取Cookie"); }
-  };
-
   const importCookie = async () => {
     if (!cookie.trim()) {
       setError("请先粘贴本人微博登录 Cookie。");
