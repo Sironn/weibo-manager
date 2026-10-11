@@ -154,3 +154,32 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .cookie-actions .icon-tooltip { position:relative; width:34px; height:34px; padding:0; flex-shrink:0; }
 .cookie-actions .icon-tooltip::after { content:attr(data-tooltip); position:absolute; z-index:30; left:50%; bottom:calc(100% + 7px); transform:translate(-50%,3px); padding:5px 8px; border-radius:5px; background:#27324a; color:#fff; font-size:10px; font-weight:500; line-height:1.4; white-space:nowrap; pointer-events:none; opacity:0; visibility:hidden; transition:opacity .12s ease,transform .12s ease,visibility .12s ease; }
 .cookie-actions .icon-tooltip:hover::after,.cookie-actions .icon-tooltip:focus-visible::after { opacity:1; visibility:visible; transform:translate(-50%,0); }
+
+
+/* Cookie 保存按钮与状态提示在同一行垂直居中，覆盖导入区域按钮的旧上边距。 */
+.cookie-import .account-actions { align-items: center; }
+.cookie-import .account-actions > .button { margin-top: 0; }
+.cookie-import .cookie-lock-note { align-self: center; }
+
+/* 任务中心“更多”详情：隐藏滚动条但保留滚轮、触控板和键盘滚动。 */
+.more-task-modal {
+  position: relative;
+  width: min(720px, 100%);
+  max-height: 80vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  border-radius: 13px;
+}
+.more-task-modal::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.more-task-modal h3 { padding-right: 42px; overflow-wrap: anywhere; }
+.more-task-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
