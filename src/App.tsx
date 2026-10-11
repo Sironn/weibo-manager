@@ -168,10 +168,12 @@ function App() {
       setPostsLoading(false);
       setPostsPaused(false);
       setPostsCancelling(false);
-      try {
-        await invoke("set_delete_search_paused", { paused: false });
-        await invoke("set_delete_search_cancelled", { cancelled: false });
-      } catch { /* 搜索已结束，无需额外处理 */ }
+      if (acceptDeletePostEvents.current) {
+        try {
+          await invoke("set_delete_search_paused", { paused: false });
+          await invoke("set_delete_search_cancelled", { cancelled: false });
+        } catch { /* 搜索已结束，无需额外处理 */ }
+      }
     }
   };
   const searchDeletePosts = async () => {
