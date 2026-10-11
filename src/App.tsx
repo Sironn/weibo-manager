@@ -190,7 +190,6 @@ function App() {
   useEffect(() => {
     void initializeLogger().then(setLoggingEnabled);
   }, []);
-  useEffect(() => { log("info", "navigation", `切换页面：${page}`); }, [page]);
   const toggleLogging = async (enabled: boolean) => {
     try {
       const saved = await updateLoggerEnabled(enabled);
