@@ -100,3 +100,6 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 }
 
 .log-toggle{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11px;white-space:nowrap}.log-toggle input{accent-color:#526bd7;width:15px;height:15px;margin:0}
+
+/* 任务中心：缩小行高，避免为详情文本预留多余空间。 */
+.table-wrap table:has(th:nth-child(6)) th,.table-wrap table:has(th:nth-child(6)) td{padding-top:8px;padding-bottom:8px}
