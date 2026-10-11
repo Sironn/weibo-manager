@@ -513,7 +513,9 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  }
  let _execution_guard = TaskExecutionGuard(&control.task_running);
  let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return Err("任务中没有可删除的微博 ID。".into());}if task.state=="执行中"{return Err("该删除任务已经在执行。".into());}if task.state=="已完成"{return Err("该任务已完成，不能重复执行。".into());}
- control.task_cancelled.store(false,Ordering::Relaxed);control.task_paused.store(false,Ordering::Relaxed);let cookie=store.cookie()?;
+ control.task_cancelled.store(false,Ordering::Relaxed);control.task_paused.store(false,Ordering::Relaxed);
+ if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
+ let cookie=store.cookie()?;
  match check_cookie_availability(&cookie).await? { "valid" => {}, _ => return Err("Cookie 已失效，请重新登录微博后再执行删除任务。".into()) }
  let client=reqwest::Client::builder().timeout(std::time::Duration::from_secs(25)).build().map_err(|e|format!("初始化删除请求失败：{e}"))?;
  let config=client.get("https://m.weibo.cn/api/config").header(COOKIE,cookie.as_str()).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(ACCEPT,"application/json, text/plain, */*").send().await.map_err(|e|format!("验证微博会话失败：{e}"))?;
