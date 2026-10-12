@@ -20,7 +20,7 @@ struct DownloadTaskControl {
     running: std::sync::atomic::AtomicBool,
 }
 impl Default for DownloadTaskControl {
-    fn default() -> Self { Self { paused: false.into(), cancelled: false.into(), running: false.into() } }
+    fn default() -> Self { Self { paused: std::sync::atomic::AtomicBool::new(false), cancelled: std::sync::atomic::AtomicBool::new(false), running: std::sync::atomic::AtomicBool::new(false) } }
 }
 fn task_control(control: &DownloadControl, task_id: u64) -> Arc<DownloadTaskControl> {
     let mut tasks = control.tasks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
