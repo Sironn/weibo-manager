@@ -602,10 +602,11 @@ function App() {
             <Field label="下载文件夹命名模板">
               <input value={filenameSettings.folderTemplate} onFocus={() => setTemplateTarget("folder")} onChange={e => saveFilenameSettings({...filenameSettings, folderTemplate: e.target.value})} placeholder="%USER_SCREEN_NAME%" />
             </Field>
+            <p className="template-help">文件夹示例：{previewFoldername}</p>
             <Field label="下载文件名模板">
               <input value={filenameSettings.fileTemplate} onFocus={() => setTemplateTarget("file")} onChange={e => saveFilenameSettings({...filenameSettings, fileTemplate: e.target.value})} placeholder="%USER_SCREEN_NAME% [%POST_TIME%] %POST_ID%_%MEDIA_INDEX%%EXT%" />
             </Field>
-            <p className="template-help">文件夹示例：{previewFoldername}</p><p className="template-help">文件名示例：{previewFilename}</p><p className="template-help">发布时间格式示例：2024-08-18 14:30:00</p>
+            <p className="template-help">文件名示例：{previewFilename}</p><p className="template-help">发布时间格式示例：2024-08-18 14:30:00</p>
           </div>
           <div className="variable-picker">
             <div className="variable-picker-heading"><strong>可用变量</strong><span>当前插入目标：{templateTarget === "file" ? "文件名模板" : "文件夹模板"}</span></div>
