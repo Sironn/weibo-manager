@@ -7,6 +7,31 @@ use serde_json::Value;
 use std::{fs, path::{Path, PathBuf}, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+#[derive(Default)]
+pub struct DownloadControl {
+    paused: std::sync::atomic::AtomicBool,
+    cancelled: std::sync::atomic::AtomicBool,
+}
+async fn wait_download_resume(control: &DownloadControl) -> Result<(), String> {
+    while control.paused.load(std::sync::atomic::Ordering::Acquire) {
+        if control.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("下载任务已取消。".into());
+        }
+        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(150))).await.ok();
+    }
+    if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
+    Ok(())
+}
+#[tauri::command]
+pub fn set_download_paused(paused: bool, control: State<'_, DownloadControl>) {
+    control.paused.store(paused, std::sync::atomic::Ordering::Release);
+}
+#[tauri::command]
+pub fn cancel_download(control: State<'_, DownloadControl>) {
+    control.cancelled.store(true, std::sync::atomic::Ordering::Release);
+    control.paused.store(false, std::sync::atomic::Ordering::Release);
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadTaskConfig {
@@ -229,7 +254,10 @@ pub async fn download_media(
     media_type: String,
     file_template: String,
     folder_template: String,
+    control: State<'_, DownloadControl>,
 ) -> Result<Vec<DownloadSummary>, String> {
+    control.cancelled.store(false, std::sync::atomic::Ordering::Release);
+    control.paused.store(false, std::sync::atomic::Ordering::Release);
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let cookie = store.cookie()?;
     let root = resolve_download_root(&app, &download_dir)?;
@@ -260,6 +288,7 @@ pub async fn download_media(
         let mut total = 0usize;
 
         loop {
+            wait_download_resume(&control).await?;
             if page > 100 { break; }
             let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}");
             let mut request = client.get(&endpoint)
@@ -318,6 +347,7 @@ pub async fn download_media(
                 }
                 let mut media = extract_media(&card, media_filter);
                 for (url, kind, ext) in media.drain(..) {
+                    wait_download_resume(&control).await?;
                     total += 1;
                     let filename = replace_template(&file_template, &display_name, &post_time, &post_id, total, &ext);
                     let target = user_folder.join(filename);
