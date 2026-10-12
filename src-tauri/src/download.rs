@@ -1,10 +1,92 @@
 use crate::{auth::SessionStore, logger::write_log, settings};
 use chrono::DateTime;
 use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
-use serde::Serialize;
+use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{fs, path::{Path, PathBuf}, time::Duration};
 use tauri::{AppHandle, Emitter, Manager, State};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadTaskConfig {
+    pub users: Vec<String>,
+    pub download_dir: String,
+    pub date_from: String,
+    pub date_to: String,
+    pub media_type: String,
+    pub file_template: String,
+    pub folder_template: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadTaskRecord {
+    pub id: u64,
+    pub title: String,
+    pub state: String,
+    pub progress: u8,
+    pub detail: String,
+    pub created_at: String,
+    pub download_config: DownloadTaskConfig,
+}
+fn task_db(app: &AppHandle) -> Result<Connection, String> {
+    let dir = app.path().app_data_dir().map_err(|e| format!("无法定位应用数据目录：{e}"))?;
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建应用数据目录：{e}"))?;
+    let db = Connection::open(dir.join("weibo-manager.sqlite3")).map_err(|e| format!("无法打开任务数据库：{e}"))?;
+    db.execute_batch("CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, detail TEXT NOT NULL);")
+        .map_err(|e| format!("初始化任务表失败：{e}"))?;
+    Ok(db)
+}
+#[tauri::command]
+pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: String, date_from: String, date_to: String, media_type: String, file_template: String, folder_template: String) -> Result<DownloadTaskRecord, String> {
+    if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
+    let config = DownloadTaskConfig { users: users.clone(), download_dir, date_from, date_to, media_type, file_template, folder_template };
+    let task = DownloadTaskRecord {
+        id: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 + 1_000_000_000_000,
+        title: format!("媒体下载（{} 个用户）", users.len()), state: "等待中".into(), progress: 0,
+        detail: "待启动".into(), created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), download_config: config,
+    };
+    let json = serde_json::to_string(&task).map_err(|e| format!("序列化下载任务失败：{e}"))?;
+    let db = task_db(&app)?;
+    db.execute("INSERT INTO tasks (id, kind, state, created_at, detail) VALUES (?1, '下载', ?2, ?3, ?4)",
+        params![task.id.to_string(), task.state, task.created_at, json])
+        .map_err(|e| format!("保存下载任务失败：{e}"))?;
+    Ok(task)
+}
+#[tauri::command]
+pub fn get_download_tasks(app: AppHandle) -> Result<Vec<DownloadTaskRecord>, String> {
+    let db = task_db(&app)?;
+    let mut statement = db.prepare("SELECT detail FROM tasks WHERE kind='下载' ORDER BY created_at DESC")
+        .map_err(|e| format!("读取下载任务失败：{e}"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0)).map_err(|e| format!("读取下载任务失败：{e}"))?;
+    let mut tasks = Vec::new();
+    for row in rows {
+        let raw = row.map_err(|e| format!("读取下载任务失败：{e}"))?;
+        if let Ok(task) = serde_json::from_str::<DownloadTaskRecord>(&raw) { tasks.push(task); }
+    }
+    Ok(tasks)
+}
+#[tauri::command]
+pub fn save_download_task(app: AppHandle, task: DownloadTaskRecord) -> Result<(), String> {
+    let json = serde_json::to_string(&task).map_err(|e| format!("序列化下载任务失败：{e}"))?;
+    let db = task_db(&app)?;
+    db.execute("UPDATE tasks SET state=?2, detail=?3 WHERE id=?1 AND kind='下载'",
+        params![task.id.to_string(), task.state, json])
+        .map_err(|e| format!("更新下载任务失败：{e}"))?;
+    Ok(())
+}
+#[tauri::command]
+pub fn remove_download_tasks(app: AppHandle, task_ids: Vec<u64>) -> Result<Vec<u64>, String> {
+    let mut db = task_db(&app)?;
+    let tx = db.transaction().map_err(|e| format!("开始删除下载任务事务失败：{e}"))?;
+    let mut removed = Vec::new();
+    for id in task_ids {
+        if tx.execute("DELETE FROM tasks WHERE id=?1 AND kind='下载' AND state<>'执行中'", params![id.to_string()])
+            .map_err(|e| format!("删除下载任务失败：{e}"))? > 0 { removed.push(id); }
+    }
+    tx.commit().map_err(|e| format!("提交下载任务删除失败：{e}"))?;
+    Ok(removed)
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
