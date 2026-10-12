@@ -37,7 +37,7 @@ export const defaultFilenameSettings: FilenameSettings = {
 // 将动态字段和用户输入规范化，避免路径分隔符及 Windows 非法文件名字符进入名称。
 export function sanitizeFilenamePart(value: string): string {
   return value
-    .replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-")
+    .replace(/[<>"/\\|?*\u0000-\u001F]/g, "-").replace(/:/g, "ː")
     .replace(/\s+/g, " ")
     .replace(/[. ]+$/g, "")
     .trim()
