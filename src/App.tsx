@@ -514,6 +514,12 @@ function App() {
   const addDownloadUser = async () => {
     const input = newUser.trim();
     if (!input) return;
+    const normalizeUser = (value: string) => extractWeiboUid(value) || value.trim().toLowerCase().replace(/\\/$/, "");
+    if (users.some(user => normalizeUser(user) === normalizeUser(input))) {
+      notify("该用户已在目标用户队列中，无需重复添加。");
+      setNewUser("");
+      return;
+    }
     setUsers(current => [...current, input]);
     setNewUser("");
     if (cookieValidity === "valid") {
@@ -552,6 +558,9 @@ function App() {
       });
       const task: Task = { ...saved, kind: "下载", downloadConfig: saved.downloadConfig };
       setTasks(current => [task, ...current.filter(item => item.id !== task.id)]);
+      setUsers([]);
+      setUserLabels({});
+      setNewUser("");
       setDownloadStatus("下载任务已创建，请前往任务中心启动。");
       setPage("tasks");
       notify("下载任务已保存，请在任务中心启动。");
