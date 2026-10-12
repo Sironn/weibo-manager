@@ -9,8 +9,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Default)]
 pub struct DownloadControl {
-    paused: std::sync::atomic::AtomicBool,
-    cancelled: std::sync::atomic::AtomicBool,
+    pub(crate) paused: std::sync::atomic::AtomicBool,
+    pub(crate) cancelled: std::sync::atomic::AtomicBool,
 }
 async fn wait_download_resume(control: &DownloadControl) -> Result<(), String> {
     while control.paused.load(std::sync::atomic::Ordering::Acquire) {
