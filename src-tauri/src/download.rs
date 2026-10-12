@@ -168,19 +168,31 @@ pub async fn download_media(
 
         loop {
             if page > 100 { break; }
-            let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}&since_id={since_id}");
-            let response = client.get(&endpoint)
+            let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}&page={page}");
+            let mut request = client.get(&endpoint)
                 .header(COOKIE, &cookie)
                 .header(REFERER, "https://m.weibo.cn/")
                 .header(ACCEPT, "application/json, text/plain, */*")
-                .header(USER_AGENT, "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
-                .send().await.map_err(|e| format!("读取用户 {uid} 第 {page} 页失败：{e}"))?;
+                .header(USER_AGENT, "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1");
+            if !since_id.is_empty() {
+                request = request.query(&[("since_id", since_id.as_str())]);
+            }
+            let response = request.send().await
+                .map_err(|e| format!("读取用户 {uid} 第 {page} 页失败：{e}"))?;
             if !response.status().is_success() {
                 return Err(format!("读取用户 {uid} 失败：微博返回 HTTP {}。", response.status()));
             }
             let body: Value = response.json().await.map_err(|e| format!("解析用户 {uid} 的微博数据失败：{e}"))?;
-            if body.get("ok").and_then(Value::as_i64) != Some(1) {
-                return Err(format!("读取用户 {uid} 失败：微博接口未返回成功结果，请检查 Cookie 或 UID。"));
+            let api_ok = body.get("ok").and_then(|v| {
+                v.as_i64().map(|n| n == 1).or_else(|| v.as_str().map(|s| s == "1"))
+            }).unwrap_or(false);
+            if !api_ok {
+                let api_message = body.get("msg").and_then(Value::as_str)
+                    .or_else(|| body.pointer("/data/msg").and_then(Value::as_str))
+                    .unwrap_or("接口未提供错误说明");
+                let api_code = body.get("errno").or_else(|| body.get("error_code"))
+                    .map(Value::to_string).unwrap_or_else(|| "未知".into());
+                return Err(format!("读取用户 {uid} 第 {page} 页失败：微博接口拒绝请求（错误码 {api_code}，说明：{api_message}）。请确认 UID 正确且 Cookie 仍有效。"));
             }
             let next_since_id = body.pointer("/data/cardlistInfo/since_id").and_then(Value::as_str)
                 .map(str::to_string)
@@ -214,7 +226,7 @@ pub async fn download_media(
                         skipped += 1;
                         continue;
                     }
-                    let result = client.get(&url).header(COOKIE, &cookie).header(REFERER, "https://m.weibo.cn/")
+                    let result = client.get(&url).header(REFERER, "https://m.weibo.cn/")
                         .header(USER_AGENT, "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1")
                         .send().await;
                     match result {

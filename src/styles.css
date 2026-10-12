@@ -183,3 +183,6 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
   align-items: center;
   justify-content: center;
 }
+
+/* 下载失败提示与面板底部保持间距，避免提示框贴住边缘。 */
+.download-status-error { margin: 14px 20px 18px; width: calc(100% - 40px); }
