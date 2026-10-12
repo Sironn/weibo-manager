@@ -592,16 +592,18 @@ pub fn remove_delete_tasks(
     // 如果所选任务正在执行，先请求取消并解除暂停，等后端停止后再删除记录。
     let active_task_id = control.active_task_id.load(Ordering::Acquire);
     let mut active_selected = active_task_id != 0 && task_ids.contains(&active_task_id);
-    for task_id in &task_ids {
-        if active_selected { break; }
-        let state = db.query_row(
-            "SELECT state FROM tasks WHERE id=?1 AND kind='删除'",
-            params![task_id.to_string()],
-            |row| row.get::<_, String>(0),
-        ).optional().map_err(|e| format!("读取任务状态失败：{e}"))?;
-        if matches!(state.as_deref(), Some("执行中" | "已暂停")) {
-            active_selected = true;
-            break;
+    // 只有当前没有活动任务 ID 时，才把数据库里的执行中状态当作上次异常退出留下的旧状态。
+    if active_task_id == 0 {
+        for task_id in &task_ids {
+            let state = db.query_row(
+                "SELECT state FROM tasks WHERE id=?1 AND kind='删除'",
+                params![task_id.to_string()],
+                |row| row.get::<_, String>(0),
+            ).optional().map_err(|e| format!("读取任务状态失败：{e}"))?;
+            if matches!(state.as_deref(), Some("执行中" | "已暂停")) {
+                active_selected = true;
+                break;
+            }
         }
     }
     if active_selected {
