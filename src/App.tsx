@@ -16,7 +16,7 @@ import {
 type Page = "dashboard" | "accounts" | "delete" | "download" | "tasks" | "settings";
 type TaskState = "执行中" | "等待中" | "已暂停" | "已完成" | "失败" | "已取消";
 type DeletePostResult = { postId: string; state: string; detail: string };
-type DownloadTaskConfig = { users: string[]; downloadDir: string; dateFrom: string; dateTo: string; mediaType: string; fileTemplate: string; folderTemplate: string };
+type DownloadTaskConfig = { users: string[]; downloadDir: string; dateFrom: string; dateTo: string; mediaType: string; fileTemplate: string; folderTemplate: string; modifyFileTime: boolean };
 type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string; postIds?: string[]; dateFrom?: string; dateTo?: string; keyword?: string; postType?: string; results?: DeletePostResult[]; downloadConfig?: DownloadTaskConfig };
 type WeiboPost = { id: string; date: string; createdAt: string; kind: string; text: string; media: string };
 type PersistedDeleteTask = { id: number; title: string; kind: string; state: TaskState; progress: number; detail: string; createdAt: string; postIds: string[]; dateFrom: string; dateTo: string; keyword: string; postType: string; results?: DeletePostResult[] };
@@ -114,6 +114,7 @@ function App() {
   const [downloadDateFrom, setDownloadDateFrom] = useState("");
   const [downloadDateTo, setDownloadDateTo] = useState("");
   const [downloadMediaType, setDownloadMediaType] = useState("all");
+  const [modifyDownloadFileTime, setModifyDownloadFileTime] = useState(false);
   const [appliedDownloadDateFrom, setAppliedDownloadDateFrom] = useState("");
   const [appliedDownloadDateTo, setAppliedDownloadDateTo] = useState("");
   const [appliedDownloadMediaType, setAppliedDownloadMediaType] = useState("all");
@@ -527,13 +528,14 @@ function App() {
       dateFrom: downloadDateFrom,
       dateTo: downloadDateTo,
       mediaType: downloadMediaType,
+      modifyFileTime: modifyDownloadFileTime,
       fileTemplate: filenameSettings.fileTemplate,
       folderTemplate: filenameSettings.folderTemplate,
     };
     try {
       const saved = await invoke<PersistedDownloadTask>("create_download_task", {
         users: config.users, downloadDir: config.downloadDir, dateFrom: config.dateFrom, dateTo: config.dateTo,
-        mediaType: config.mediaType, fileTemplate: config.fileTemplate, folderTemplate: config.folderTemplate,
+        mediaType: config.mediaType, modifyFileTime: config.modifyFileTime, fileTemplate: config.fileTemplate, folderTemplate: config.folderTemplate,
       });
       const task: Task = { ...saved, kind: "下载", downloadConfig: saved.downloadConfig };
       setTasks(current => [task, ...current.filter(item => item.id !== task.id)]);
@@ -638,7 +640,7 @@ function App() {
         <div className="panel-title"><div><strong>目标用户队列</strong><span>支持添加多个用户并排队，日期留空表示不限时间。</span></div><span className="tag blue">{users.length} 个用户</span></div>
         <div className="add-user-row"><div className="input-icon"><Users size={16}/><input placeholder="微博主页链接或用户标识" value={newUser} onChange={e => setNewUser(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newUser.trim()) void addDownloadUser(); }} /></div><button className="button secondary" onClick={() => void addDownloadUser()} disabled={!newUser.trim()}><Plus size={15}/> 添加用户</button></div>
         <div className="user-list">{users.map((user, i) => <div className="user-row" key={user + i}><div className="avatar">{user.slice(0, 1).toUpperCase()}</div><div className="user-info"><strong>{userLabels[user] ? `${userLabels[user]} UID: ${extractWeiboUid(user) || "待识别"}` : `用户名 UID: ${extractWeiboUid(user) || "待识别"}`}</strong><span>待采集 · {extractWeiboUid(user) ? "UID 已识别" : "请确认输入的是 UID 或微博主页链接"}</span></div><span className="tag neutral">队列 {i + 1}</span><button className="icon-button" aria-label="移除用户" onClick={() => setUsers(u => u.filter((_, index) => index !== i))}><X size={16}/></button></div>)}</div>
-        <div className="divider-line"/><div className="form-grid"><Field label="开始日期"><input type="date" value={downloadDateFrom} onChange={e => setDownloadDateFrom(e.target.value)}/></Field><Field label="结束日期"><input type="date" value={downloadDateTo} onChange={e => setDownloadDateTo(e.target.value)}/></Field><Field label="媒体类型"><select value={downloadMediaType} onChange={e => setDownloadMediaType(e.target.value)}><option value="all">图片、视频、LivePhoto</option><option value="images">仅图片</option><option value="videos">仅视频</option><option value="livephoto">仅 LivePhoto</option></select></Field><Field label="下载目录"><div className="input-with-button"><input value={downloadPath} onChange={e => setDownloadPath(e.target.value)}/><button className="icon-button" onClick={() => void invoke<string | null>("select_download_directory").then(path => { if (path) setDownloadPath(path); }).catch(reason => notify(`选择下载目录失败：${String(reason)}`))} aria-label="选择下载目录" title="选择下载目录"><FolderOpen size={16}/></button></div></Field></div>
+        <div className="divider-line"/><div className="form-grid"><Field label="开始日期"><input type="date" value={downloadDateFrom} onChange={e => setDownloadDateFrom(e.target.value)}/></Field><Field label="结束日期"><input type="date" value={downloadDateTo} onChange={e => setDownloadDateTo(e.target.value)}/></Field><Field label="媒体类型"><select value={downloadMediaType} onChange={e => setDownloadMediaType(e.target.value)}><option value="all">图片、视频、LivePhoto</option><option value="images">仅图片</option><option value="videos">仅视频</option><option value="livephoto">仅 LivePhoto</option></select></Field><Field label="下载目录"><div className="input-with-button"><input value={downloadPath} onChange={e => setDownloadPath(e.target.value)}/><button className="icon-button" onClick={() => void invoke<string | null>("select_download_directory").then(path => { if (path) setDownloadPath(path); }).catch(reason => notify(`选择下载目录失败：${String(reason)}`))} aria-label="选择下载目录" title="选择下载目录"><FolderOpen size={16}/></button></div></Field><Field label="文件时间"><label className="inline-toggle"><input type="checkbox" checked={modifyDownloadFileTime} onChange={e => setModifyDownloadFileTime(e.target.checked)}/><span>按微博发布时间修改文件时间</span></label></Field></div>
       </div>
       <div className="filter-foot download-filter-foot"><span>筛选条件：{downloadDateFrom || "不限"} 至 {downloadDateTo || "不限"} {downloadMediaType === "all" ? "全部媒体" : downloadMediaType === "images" ? "仅图片" : downloadMediaType === "videos" ? "仅视频" : "仅 LivePhoto"}</span><div className="account-actions"><button className="button primary" onClick={() => void createDownloadTask()} disabled={!users.length || downloadBusy}><Plus size={15}/> 创建下载任务</button></div></div>
     </section>;
