@@ -354,6 +354,9 @@ pub async fn download_media(
     control.paused.store(false, std::sync::atomic::Ordering::Release);
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let cookie = store.cookie()?;
+    if crate::auth::check_cookie_availability(&cookie).await? != "valid" {
+        return Err("Cookie 已失效，请重新登录微博后再开始下载。".into());
+    }
     let root = resolve_download_root(&app, &download_dir)?;
     fs::create_dir_all(&root).map_err(|e| format!("无法创建下载目录：{e}"))?;
     let client = reqwest::Client::builder().timeout(Duration::from_secs(45)).redirect(reqwest::redirect::Policy::limited(5)).build()
