@@ -448,7 +448,9 @@ function App() {
     const deleteIds = ids.filter(id => tasks.some(task => task.id === id && task.kind === "删除"));
     try {
       const removedDeleteIds = deleteIds.length ? await invoke<number[]>("remove_delete_tasks", { taskIds: deleteIds }) : [];
-      const removedIds = [...ids.filter(id => tasks.some(task => task.id === id && task.kind === "下载")), ...removedDeleteIds];
+      const downloadIds = ids.filter(id => tasks.some(task => task.id === id && task.kind === "下载"));
+      const removedDownloadIds = downloadIds.length ? await invoke<number[]>("remove_download_tasks", { taskIds: downloadIds }) : [];
+      const removedIds = [...removedDownloadIds, ...removedDeleteIds];
       setTasks(current => current.filter(task => !removedIds.includes(task.id)));
       setSelectedTaskIds([]);
       setShowDeleteTasksConfirm(false);
@@ -510,7 +512,9 @@ function App() {
     const valid = await refreshDownloadCookieValidity();
     if (!valid) { notify("Cookie 不可用，无法启动下载任务。"); return; }
     setDownloadBusy(true);
-    setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "执行中", progress: 1, detail: "正在读取微博数据并下载媒体" } : item));
+    const startedTask = { ...task, state: "执行中" as TaskState, progress: 1, detail: "正在读取微博数据并下载媒体" };
+    setTasks(current => current.map(item => item.id === task.id ? startedTask : item));
+    try { await invoke("save_download_task", { task: startedTask }); } catch (reason) { log("error", "download", `保存下载任务状态失败：${String(reason)}`); }
     setDownloadStatus("正在读取微博数据并下载媒体，请保持应用运行。");
     log("info", "download", `任务 ${task.id} 开始执行，目标用户数：${task.downloadConfig.users.length}`);
     try {
@@ -520,13 +524,17 @@ function App() {
       const failed = results.reduce((sum, item) => sum + item.failed, 0);
       const state: TaskState = failed > 0 && downloaded === 0 ? "失败" : "已完成";
       const detail = `下载 ${downloaded}，跳过 ${skipped}，失败 ${failed}`;
-      setTasks(current => current.map(item => item.id === task.id ? { ...item, state, progress: 100, detail } : item));
+      const finishedTask = { ...startedTask, state, progress: 100, detail };
+      setTasks(current => current.map(item => item.id === task.id ? finishedTask : item));
+      await invoke("save_download_task", { task: finishedTask });
       setDownloadStatus(results.map(item => `${item.user}：${item.detail}`).join("；") || detail);
       notify(`下载结束：${detail}`);
       log(state === "失败" ? "error" : "info", "download", detail);
     } catch (reason) {
       const detail = String(reason);
-      setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "失败", progress: 100, detail } : item));
+      const failedTask = { ...startedTask, state: "失败" as TaskState, progress: 100, detail };
+      setTasks(current => current.map(item => item.id === task.id ? failedTask : item));
+      try { await invoke("save_download_task", { task: failedTask }); } catch (saveReason) { log("error", "download", `保存失败任务状态失败：${String(saveReason)}`); }
       setDownloadStatus(`下载失败：${detail}`);
       notify(`下载失败：${detail}`);
       log("error", "download", detail);
