@@ -1,7 +1,7 @@
 use crate::{auth::SessionStore, logger::write_log, settings};
 use chrono::DateTime;
 use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{fs, path::{Path, PathBuf}, time::{Duration, SystemTime, UNIX_EPOCH}};
@@ -97,16 +97,45 @@ pub async fn select_download_directory(app: AppHandle) -> Result<Option<String>,
 pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: String, date_from: String, date_to: String, media_type: String, modify_file_time: bool, file_template: String, folder_template: String) -> Result<DownloadTaskRecord, String> {
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let config = DownloadTaskConfig { users: users.clone(), download_dir, date_from, date_to, media_type, modify_file_time, file_template, folder_template };
+    let mut db = task_db(&app)?;
+    // 与删除任务一样，在同一事务中检查并创建，避免连续点击时重复插入。
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| format!("无法锁定下载任务记录：{e}"))?;
+    let mut requested_users = config.users.iter().map(|user| user.trim().to_lowercase()).filter(|user| !user.is_empty()).collect::<Vec<_>>();
+    requested_users.sort();
+    requested_users.dedup();
+    {
+        let mut statement = tx.prepare("SELECT detail FROM tasks WHERE kind='下载' AND state IN ('等待中','执行中','已暂停')")
+            .map_err(|e| format!("检查重复下载任务失败：{e}"))?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| format!("读取现有下载任务失败：{e}"))?;
+        for row in rows {
+            let serialized = row.map_err(|e| format!("读取现有下载任务失败：{e}"))?;
+            if let Ok(existing) = serde_json::from_str::<DownloadTaskRecord>(&serialized) {
+                let mut existing_users = existing.download_config.users.iter().map(|user| user.trim().to_lowercase()).filter(|user| !user.is_empty()).collect::<Vec<_>>();
+                existing_users.sort();
+                existing_users.dedup();
+                let same_scope = requested_users == existing_users
+                    && config.download_dir.trim() == existing.download_config.download_dir.trim()
+                    && config.date_from == existing.download_config.date_from
+                    && config.date_to == existing.download_config.date_to
+                    && config.media_type == existing.download_config.media_type;
+                if same_scope {
+                    return Err("相同目标用户、下载目录和筛选条件的下载任务已存在，请前往任务中心继续处理原任务。".into());
+                }
+            }
+        }
+    }
     let task = DownloadTaskRecord {
         id: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 + 1_000_000_000_000,
         title: format!("媒体下载（{} 个用户）", users.len()), state: "等待中".into(), progress: 0,
         detail: "待启动".into(), created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), download_config: config,
     };
     let json = serde_json::to_string(&task).map_err(|e| format!("序列化下载任务失败：{e}"))?;
-    let db = task_db(&app)?;
-    db.execute("INSERT INTO tasks (id, kind, state, created_at, detail) VALUES (?1, '下载', ?2, ?3, ?4)",
+    tx.execute("INSERT INTO tasks (id, kind, state, created_at, detail) VALUES (?1, '下载', ?2, ?3, ?4)",
         params![task.id.to_string(), task.state, task.created_at, json])
         .map_err(|e| format!("保存下载任务失败：{e}"))?;
+    tx.commit().map_err(|e| format!("提交下载任务事务失败：{e}"))?;
     Ok(task)
 }
 #[tauri::command]
