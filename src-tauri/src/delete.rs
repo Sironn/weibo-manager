@@ -616,7 +616,7 @@ pub fn remove_delete_tasks(
     if control.task_running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("有删除任务正在执行，请稍后重试删除。".into());
     }
-    let _execution_guard = TaskExecutionGuard(&control.task_running);
+    let _execution_guard = TaskExecutionGuard { running: &control.task_running, active_task_id: None };
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| format!("无法锁定任务数据库：{e}"))?;
     let mut unique_ids = std::collections::HashSet::new();
