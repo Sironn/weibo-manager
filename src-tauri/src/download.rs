@@ -27,7 +27,7 @@ struct DownloadProgress {
 
 fn safe_name(value: &str) -> String {
     let name: String = value.chars().map(|c| {
-        if c.is_control() || ['<', '>', ':', '"', '/', '\\', '|', '?', '*'].contains(&c) { '-' } else { c }
+        if c.is_control() || ['<', '>', '"', '/', '\\', '|', '?', '*'].contains(&c) { '-' } else if c == ':' { 'ː' } else { c }
     }).collect();
     let name = name.trim().trim_matches('.').trim();
     if name.is_empty() { "weibo".into() } else { name.chars().take(100).collect() }
@@ -59,6 +59,17 @@ fn user_id_from_input(input: &str) -> Result<String, String> {
     let id = url.path_segments().and_then(|segments| segments.filter(|s| !s.is_empty()).find(|s| s.chars().all(|c| c.is_ascii_digit())))
         .ok_or_else(|| "微博主页链接中未找到数字 UID；请直接输入 UID。".to_string())?;
     Ok(id.to_string())
+}
+
+fn parse_post_time(raw: &str) -> Option<String> {
+    DateTime::parse_from_str(raw, "%a %b %d %H:%M:%S %z %Y").ok()
+        .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string())
+        .or_else(|| {
+            let s = raw.trim();
+            if s.len() >= 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-') {
+                Some(s[..10].to_string())
+            } else { None }
+        })
 }
 
 fn parse_post_date(raw: &str) -> Option<String> {
@@ -213,7 +224,8 @@ pub async fn download_media(
                     .or_else(|| post.get("id").and_then(Value::as_i64).map(|id| id.to_string()))
                     .unwrap_or_default();
                 if post_id.is_empty() { continue; }
-                let post_date = post.get("created_at").and_then(Value::as_str).and_then(parse_post_date).unwrap_or_default();
+                let post_time = post.get("created_at").and_then(Value::as_str).and_then(parse_post_time).unwrap_or_default();
+                let post_date = post_time.get(..10).unwrap_or(&post_time).to_string();
                 if !date_from.is_empty() && !post_date.is_empty() && post_date < date_from { continue; }
                 if !date_to.is_empty() && !post_date.is_empty() && post_date > date_to { continue; }
                 let name = post.pointer("/user/screen_name").and_then(Value::as_str).unwrap_or(&uid);
@@ -225,7 +237,7 @@ pub async fn download_media(
                 let mut media = extract_media(&card, media_filter);
                 for (url, kind, ext) in media.drain(..) {
                     total += 1;
-                    let filename = replace_template(&file_template, &display_name, &post_date, &post_id, total, &ext);
+                    let filename = replace_template(&file_template, &display_name, &post_time, &post_id, total, &ext);
                     let target = user_folder.join(filename);
                     if target.exists() {
                         skipped += 1;
