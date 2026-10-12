@@ -102,6 +102,7 @@ function App() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [executingDeleteTask, setExecutingDeleteTask] = useState<number | null>(null);
   const [deleteActionTask, setDeleteActionTask] = useState<Task | null>(null);
+  const [pendingDeleteStartIds, setPendingDeleteStartIds] = useState<number[]>([]);
   const [moreTask, setMoreTask] = useState<Task | null>(null);
   const [users, setUsers] = useState<string[]>([]);
   const [userLabels, setUserLabels] = useState<Record<string, string>>({});
@@ -476,6 +477,12 @@ function App() {
       notify("执行删除任务失败：" + String(reason));
     } finally {
       setExecutingDeleteTask(null);
+      const nextId = pendingDeleteStartIds[0];
+      if (nextId !== undefined) {
+        setPendingDeleteStartIds(current => current.slice(1));
+        const nextTask = tasksRef.current.find(item => item.id === nextId && item.kind === "删除");
+        if (nextTask) setDeleteActionTask(nextTask);
+      }
     }
   };
   const removeSelectedTasks = async () => {
@@ -651,8 +658,9 @@ function App() {
     downloads.forEach(task => void executeDownloadTask(task));
     const deletions = selected.filter(task => task.kind === "删除" && (task.state === "等待中" || task.state === "失败" || task.state === "已取消"));
     if (deletions.length) {
+      setPendingDeleteStartIds(deletions.slice(1).map(task => task.id));
       setDeleteActionTask(deletions[0]);
-      notify("已提交所选下载任务；删除任务仍需逐个确认。");
+      notify("已提交所选任务；每个删除任务都会单独要求确认。");
     } else if (downloads.length) notify("已提交所选下载任务。");
     else notify("所选任务中没有可以开始的任务。");
   };
@@ -756,7 +764,7 @@ function App() {
           {moreTask.downloadConfig && <div><strong>下载设置：</strong><div style={{display:"grid",gap:5,marginTop:6}}><div>下载目录：{moreTask.downloadConfig.downloadDir}</div><div>修改创建日期：{moreTask.downloadConfig.modifyFileTime ? "开启" : "关闭"}</div><div>文件夹模板：{moreTask.downloadConfig.folderTemplate}</div><div>文件名模板：{moreTask.downloadConfig.fileTemplate}</div></div></div>}
           {moreTask.downloadResults && moreTask.downloadResults.length > 0 && <div><strong>逐用户结果：</strong><div style={{display:"grid",gap:8,marginTop:6}}>{moreTask.downloadResults.map((item, index) => <div key={item.user + index}><div>{item.user}</div><div>下载 {item.downloaded + item.skipped + item.failed}，成功 {item.downloaded}，跳过 {item.skipped}，失败 {item.failed}</div>{item.detail.trim() && <div>{item.detail}</div>}</div>)}</div></div>}
         </div></div></div>}
-            {deleteActionTask && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-action-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-action-title">{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "确认重试删除任务" : "确认执行删除任务"}</h3><p>{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "任务“" + deleteActionTask.title + "”此前未完整完成。重试时会跳过已确认删除成功的微博，只处理失败或未处理项目。" : "即将向微博发送真实删除请求。任务“" + deleteActionTask.title + "”将逐条执行删除操作。"}</p><div className="warning-box">微博删除不可恢复，请确认任务内容后继续。</div><div className="modal-actions"><button className="button ghost" onClick={() => setDeleteActionTask(null)}>取消</button><button className="button danger" onClick={() => void confirmDeleteTask()}>确认执行</button></div></div></div>}
+            {deleteActionTask && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-action-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-action-title">{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "确认重试删除任务" : "确认执行删除任务"}</h3><p>{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "任务“" + deleteActionTask.title + "”此前未完整完成。重试时会跳过已确认删除成功的微博，只处理失败或未处理项目。" : "即将向微博发送真实删除请求。任务“" + deleteActionTask.title + "”将逐条执行删除操作。"}</p><div className="warning-box">微博删除不可恢复，请确认任务内容后继续。</div><div className="modal-actions"><button className="button ghost" onClick={() => { setDeleteActionTask(null); setPendingDeleteStartIds([]); }}>取消</button><button className="button danger" onClick={() => void confirmDeleteTask()}>确认执行</button></div></div></div>}
             {showDeleteTasksConfirm && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-tasks-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-tasks-title">确认删除任务记录</h3><p>确定删除选中的 {selectedTaskCount} 条任务记录吗？删除任务记录不会撤销已经在微博执行的删除操作。</p><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteTasksConfirm(false)}>取消</button><button className="button danger" onClick={() => void removeSelectedTasks()}>确认删除</button></div></div></div>}
     </section>;
     // 设置页面由右侧分区承载；左侧菜单负责切换并定位到对应分区。
