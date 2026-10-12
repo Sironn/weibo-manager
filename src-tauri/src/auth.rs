@@ -359,7 +359,10 @@ pub async fn delete_weibo_cookie(
     app: AppHandle,
     store: State<'_, SessionStore>,
     control: State<'_, crate::delete::DeleteSearchControl>,
+    download_control: State<'_, crate::download::DownloadControl>,
 ) -> Result<(), String> {
+    download_control.cancelled.store(true, std::sync::atomic::Ordering::Release);
+    download_control.paused.store(false, std::sync::atomic::Ordering::Release);
     crate::delete::begin_cookie_removal(&control).await;
     let result = (|| -> Result<(), String> {
         let _ = write_log(&app, "INFO", "auth", "用户请求删除 Cookie 及关联任务");
