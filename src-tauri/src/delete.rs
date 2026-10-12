@@ -117,12 +117,21 @@ pub struct DeleteSearchControl {
     task_paused: AtomicBool,
     task_cancelled: AtomicBool,
     task_running: AtomicBool,
+    active_task_id: std::sync::atomic::AtomicU64,
     cookie_removal: AtomicBool,
 }
 
-struct TaskExecutionGuard<'a>(&'a AtomicBool);
+struct TaskExecutionGuard<'a> {
+    running: &'a AtomicBool,
+    active_task_id: Option<&'a std::sync::atomic::AtomicU64>,
+}
 impl Drop for TaskExecutionGuard<'_> {
-    fn drop(&mut self) { self.0.store(false, Ordering::Release); }
+    fn drop(&mut self) {
+        if let Some(task_id) = self.active_task_id {
+            task_id.store(0, Ordering::Release);
+        }
+        self.running.store(false, Ordering::Release);
+    }
 }
 
 pub(crate) async fn begin_cookie_removal(control: &DeleteSearchControl) {
@@ -517,9 +526,11 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  if control.task_running.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err() {
      return Err("已有删除任务正在执行，请等待当前任务结束。".into());
  }
- let _execution_guard = TaskExecutionGuard(&control.task_running);
+ control.task_cancelled.store(false,Ordering::Release);
+ control.task_paused.store(false,Ordering::Release);
+ control.active_task_id.store(task_id, Ordering::Release);
+ let _execution_guard = TaskExecutionGuard { running: &control.task_running, active_task_id: Some(&control.active_task_id) };
  let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return Err("任务中没有可删除的微博 ID。".into());}if task.state=="执行中"{return Err("该删除任务已经在执行。".into());}if task.state=="已完成"{return Err("该任务已完成，不能重复执行。".into());}
- control.task_cancelled.store(false,Ordering::Relaxed);control.task_paused.store(false,Ordering::Relaxed);
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
  let cookie=store.cookie()?;
  if check_cookie_availability(&cookie).await? != "valid" { return Err("Cookie 已失效，请重新登录微博后再执行删除任务。".into()) }
@@ -579,8 +590,10 @@ pub fn remove_delete_tasks(
     if task_ids.is_empty() { return Err("请先选择要删除的任务。".into()); }
     let mut db = db_connection(&app)?;
     // 如果所选任务正在执行，先请求取消并解除暂停，等后端停止后再删除记录。
-    let mut active_selected = false;
+    let active_task_id = control.active_task_id.load(Ordering::Acquire);
+    let mut active_selected = active_task_id != 0 && task_ids.contains(&active_task_id);
     for task_id in &task_ids {
+        if active_selected { break; }
         let state = db.query_row(
             "SELECT state FROM tasks WHERE id=?1 AND kind='删除'",
             params![task_id.to_string()],
