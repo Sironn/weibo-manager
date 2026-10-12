@@ -140,6 +140,35 @@ pub fn remove_download_tasks(app: AppHandle, task_ids: Vec<u64>) -> Result<Vec<u
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ResolvedDownloadUser {
+    pub uid: String,
+    pub screen_name: Option<String>,
+}
+#[tauri::command]
+pub async fn resolve_download_user(store: State<'_, SessionStore>, user_input: String) -> Result<ResolvedDownloadUser, String> {
+    let uid = user_id_from_input(&user_input)?;
+    let cookie = store.cookie()?;
+    if crate::auth::check_cookie_availability(&cookie).await? != "valid" {
+        return Err("Cookie 已失效，请重新登录微博后再识别用户昵称。".into());
+    }
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()
+        .map_err(|e| format!("创建用户识别请求失败：{e}"))?;
+    let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=100505{uid}");
+    let response = client.get(endpoint).header(COOKIE, &cookie)
+        .header(REFERER, "https://m.weibo.cn/")
+        .header(ACCEPT, "application/json, text/plain, */*")
+        .header(USER_AGENT, "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1")
+        .send().await.map_err(|e| format!("识别微博用户失败：{e}"))?;
+    if !response.status().is_success() { return Err(format!("识别微博用户失败，HTTP {}", response.status().as_u16())); }
+    let body: Value = response.json().await.map_err(|e| format!("解析用户资料失败：{e}"))?;
+    let screen_name = body.pointer("/data/userInfo/screen_name").and_then(Value::as_str)
+        .or_else(|| body.pointer("/data/cards/0/user/screen_name").and_then(Value::as_str))
+        .map(str::trim).filter(|name| !name.is_empty()).map(str::to_string);
+    Ok(ResolvedDownloadUser { uid, screen_name })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DownloadSummary {
     pub user: String,
     pub downloaded: usize,
