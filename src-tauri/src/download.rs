@@ -63,6 +63,31 @@ fn task_db(app: &AppHandle) -> Result<Connection, String> {
     Ok(db)
 }
 #[tauri::command]
+pub fn select_download_directory() -> Result<Option<String>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let script = "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = '选择微博媒体下载目录'; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Write($d.SelectedPath) }";
+        let output = std::process::Command::new("powershell.exe").args(["-NoProfile", "-STA", "-Command", script]).output()
+            .map_err(|e| format!("无法打开系统目录选择窗口：{e}"))?;
+        if !output.status.success() { return Err("系统目录选择窗口打开失败。".into()); }
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        return Ok(if path.is_empty() { None } else { Some(path) });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = std::process::Command::new("osascript").args(["-e", "POSIX path of (choose folder with prompt \"选择微博媒体下载目录\")"]).output()
+            .map_err(|e| format!("无法打开系统目录选择窗口：{e}"))?;
+        if !output.status.success() { return Ok(None); }
+        let path = String::from_utf8_lossy(&output.stdout).trim().trim_end_matches('/').to_string();
+        return Ok(if path.is_empty() { None } else { Some(path) });
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Err("当前平台暂不支持原生目录选择。".into())
+    }
+}
+
+#[tauri::command]
 pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: String, date_from: String, date_to: String, media_type: String, file_template: String, folder_template: String) -> Result<DownloadTaskRecord, String> {
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let config = DownloadTaskConfig { users: users.clone(), download_dir, date_from, date_to, media_type, file_template, folder_template };
