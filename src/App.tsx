@@ -615,9 +615,8 @@ function App() {
               saveFilenameSettings({...filenameSettings, [key]: filenameSettings[key] + variable.token});
             }}><code>{variable.token}</code><span>{variable.label}</span></button>)}</div>
           </div>
-          <div className="filename-preview"><span>文件夹名称预览</span><div><FolderOpen size={18}/><code>{previewFoldername}</code></div></div>
-          <div className="filename-preview"><span>文件名预览</span><div><FileImage size={18}/><code>{previewFilename}</code><button className="icon-button" aria-label="复制文件名预览" onClick={() => { void navigator.clipboard?.writeText(previewFilename); notify("文件名预览已复制（如果系统允许剪贴板访问）。"); }}><ArrowRight size={16}/></button></div></div>
-          <div className="inline-note"><CircleHelp size={16}/> 非法字符会被安全替换；媒体索引、发布时间和扩展名在真实下载模块接入后由媒体元数据填充。当前阶段仅预览，不会下载文件。</div>
+          <div className="template-preview-text"><span>文件夹名称预览：</span><code>{previewFoldername}</code></div>
+          <div className="template-preview-text"><span>文件名预览：</span><code>{previewFilename}</code></div>
         </section>
         <section className="panel settings-section" id="settings-security">
           <div className="panel-title"><div><strong>安全与数据</strong><span>本地下载目录与数据行为</span></div></div>
