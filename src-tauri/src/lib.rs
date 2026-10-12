@@ -15,6 +15,7 @@ fn app_data_file(app: &tauri::AppHandle, name: &str) -> Option<PathBuf> {
 
 pub fn run() {
     let app = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
             let saved_settings = settings::load_with_migration(&handle);
