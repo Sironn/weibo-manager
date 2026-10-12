@@ -255,3 +255,31 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
   .download-filter-foot > span { white-space: normal; overflow-wrap: anywhere; }
   .download-filter-foot .account-actions { margin-left: 0; }
 }
+
+
+/* 统一任务列表列宽与筛选栏紧凑布局。 */
+.task-list-scroll { overflow-x: hidden; min-width: 0; }
+.task-list-scroll table { width: 100%; min-width: 0 !important; table-layout: fixed; }
+.task-list-scroll thead th { text-align: left !important; white-space: nowrap; }
+.task-list-scroll th, .task-list-scroll td { padding: 6px 5px !important; white-space: nowrap; }
+.task-list-scroll th:nth-child(1), .task-list-scroll td:nth-child(1) { width: 30px; text-align: center; }
+.task-list-scroll th:nth-child(2), .task-list-scroll td:nth-child(2) { width: 17%; }
+.task-list-scroll th:nth-child(3), .task-list-scroll td:nth-child(3) { width: 54px; }
+.task-list-scroll th:nth-child(4), .task-list-scroll td:nth-child(4) { width: 70px; }
+.task-list-scroll th:nth-child(5), .task-list-scroll td:nth-child(5) { width: 84px; }
+.task-list-scroll th:nth-child(6), .task-list-scroll td:nth-child(6) { width: auto; }
+.task-list-scroll th:nth-child(7), .task-list-scroll td:nth-child(7) { width: 84px; }
+.task-list-scroll th:nth-child(8), .task-list-scroll td:nth-child(8) { width: 42px; }
+.task-title-cell { overflow: hidden; text-overflow: ellipsis; }
+.task-title-cell strong, .task-title-cell small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-operation-actions { justify-content: flex-start !important; flex-wrap: nowrap !important; gap: 1px !important; }
+.task-operation-actions .task-action-icon { width: 25px !important; height: 27px !important; flex: 0 0 25px !important; }
+.task-bulk-actions { display: flex; align-items: center; gap: 4px; }
+.task-list-heading { justify-content: space-between; }
+.task-start-selected { color: var(--accent, #526bd7); }
+.download-form-grid { grid-template-columns: minmax(0, .75fr) minmax(0, .75fr) minmax(0, .9fr) minmax(0, 1.2fr) minmax(0, .8fr) !important; gap: 6px !important; }
+.download-form-grid .field input[type="date"], .download-form-grid .field select { width: 100%; min-width: 0; padding: 7px 4px !important; font-size: 10px !important; }
+.download-form-grid .input-with-button { min-width: 0; }
+.download-form-grid .input-with-button input { width: 100%; min-width: 0; padding: 7px 4px !important; }
+.switch-control { white-space: nowrap; }
+@media (max-width: 1120px) { .download-form-grid { grid-template-columns: minmax(0, .75fr) minmax(0, .75fr) minmax(0, .9fr) minmax(0, 1.2fr) minmax(0, .8fr) !important; } }
