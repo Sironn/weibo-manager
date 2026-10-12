@@ -42,6 +42,8 @@ pub struct DownloadTaskConfig {
     pub media_type: String,
     pub file_template: String,
     pub folder_template: String,
+    #[serde(default)]
+    pub modify_file_time: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,9 +90,9 @@ pub fn select_download_directory() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: String, date_from: String, date_to: String, media_type: String, file_template: String, folder_template: String) -> Result<DownloadTaskRecord, String> {
+pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: String, date_from: String, date_to: String, media_type: String, modify_file_time: bool, file_template: String, folder_template: String) -> Result<DownloadTaskRecord, String> {
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
-    let config = DownloadTaskConfig { users: users.clone(), download_dir, date_from, date_to, media_type, file_template, folder_template };
+    let config = DownloadTaskConfig { users: users.clone(), download_dir, date_from, date_to, media_type, modify_file_time, file_template, folder_template };
     let task = DownloadTaskRecord {
         id: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 + 1_000_000_000_000,
         title: format!("媒体下载（{} 个用户）", users.len()), state: "等待中".into(), progress: 0,
@@ -312,6 +314,7 @@ pub async fn download_media(
     media_type: String,
     file_template: String,
     folder_template: String,
+    modify_file_time: bool,
     control: State<'_, DownloadControl>,
 ) -> Result<Vec<DownloadSummary>, String> {
     control.cancelled.store(false, std::sync::atomic::Ordering::Release);
@@ -433,6 +436,22 @@ pub async fn download_media(
                                         continue;
                                     }
                                     downloaded += 1;
+                                    if modify_file_time {
+                                        let post_time_value = post.get("created_at").and_then(Value::as_str).and_then(|raw| DateTime::parse_from_str(raw, "%a %b %d %H:%M:%S %z %Y").ok());
+                                        if let Some(timestamp) = post_time_value {
+                                            let file_time: std::time::SystemTime = timestamp.into();
+                                            match fs::File::open(&target).and_then(|file| file.set_modified(file_time)) {
+                                                Ok(()) => {
+                                                    let _ = write_log(&app, "INFO", "download", "已将文件修改时间设为微博发布时间；当前实现未修改创建时间和访问时间（标准库不支持跨平台统一设置）");
+                                                }
+                                                Err(error) => {
+                                                    let _ = write_log(&app, "WARN", "download", &format!("设置文件修改时间失败，已保留系统时间：{error}"));
+                                                }
+                                            }
+                                        } else {
+                                            let _ = write_log(&app, "WARN", "download", "微博接口未返回可解析的完整发布时间，文件时间保留系统时间");
+                                        }
+                                    }
                                 }
                                 _ => failed += 1,
                             }
