@@ -548,6 +548,12 @@ function App() {
     if (task.kind !== "下载" || !task.downloadConfig || downloadBusy) return;
     const valid = await refreshDownloadCookieValidity();
     if (!valid) { notify("Cookie 不可用，无法启动下载任务。"); return; }
+    try {
+      await invoke("prepare_download_task", { taskId: task.id });
+    } catch (reason) {
+      notify(`准备下载任务失败：${String(reason)}`);
+      return;
+    }
     setDownloadBusy(true);
     const startedTask = { ...task, state: "执行中" as TaskState, progress: 1, detail: "正在读取微博数据并下载媒体" };
     setTasks(current => current.map(item => item.id === task.id ? startedTask : item));
