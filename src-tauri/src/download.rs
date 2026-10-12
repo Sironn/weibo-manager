@@ -12,6 +12,21 @@ use tauri_plugin_dialog::DialogExt;
 pub struct DownloadControl {
     pub(crate) paused: std::sync::atomic::AtomicBool,
     pub(crate) cancelled: std::sync::atomic::AtomicBool,
+    running: std::sync::atomic::AtomicBool,
+    active_task_id: std::sync::atomic::AtomicU64,
+}
+struct DownloadExecutionGuard<'a>(&'a DownloadControl);
+impl Drop for DownloadExecutionGuard<'_> {
+    fn drop(&mut self) {
+        self.0.active_task_id.store(0, std::sync::atomic::Ordering::Release);
+        self.0.running.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+#[tauri::command]
+pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) {
+    control.active_task_id.store(task_id, std::sync::atomic::Ordering::Release);
+    control.cancelled.store(false, std::sync::atomic::Ordering::Release);
+    control.paused.store(false, std::sync::atomic::Ordering::Release);
 }
 async fn wait_download_resume(control: &DownloadControl) -> Result<(), String> {
     while control.paused.load(std::sync::atomic::Ordering::Acquire) {
@@ -115,12 +130,20 @@ pub fn save_download_task(app: AppHandle, task: DownloadTaskRecord) -> Result<()
     Ok(())
 }
 #[tauri::command]
-pub fn remove_download_tasks(app: AppHandle, task_ids: Vec<u64>) -> Result<Vec<u64>, String> {
+pub fn remove_download_tasks(app: AppHandle, task_ids: Vec<u64>, control: State<'_, DownloadControl>) -> Result<Vec<u64>, String> {
+    let active_task_id = control.active_task_id.load(std::sync::atomic::Ordering::Acquire);
+    if active_task_id != 0 && task_ids.contains(&active_task_id) {
+        control.cancelled.store(true, std::sync::atomic::Ordering::Release);
+        control.paused.store(false, std::sync::atomic::Ordering::Release);
+        while control.running.load(std::sync::atomic::Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
     let mut db = task_db(&app)?;
     let tx = db.transaction().map_err(|e| format!("开始删除下载任务事务失败：{e}"))?;
     let mut removed = Vec::new();
     for id in task_ids {
-        if tx.execute("DELETE FROM tasks WHERE id=?1 AND kind='下载' AND state NOT IN ('执行中','已暂停')", params![id.to_string()])
+        if tx.execute("DELETE FROM tasks WHERE id=?1 AND kind='下载'", params![id.to_string()])
             .map_err(|e| format!("删除下载任务失败：{e}"))? > 0 { removed.push(id); }
     }
     tx.commit().map_err(|e| format!("提交下载任务删除失败：{e}"))?;
@@ -339,8 +362,16 @@ pub async fn download_media(
     modify_file_time: bool,
     control: State<'_, DownloadControl>,
 ) -> Result<Vec<DownloadSummary>, String> {
-    control.cancelled.store(false, std::sync::atomic::Ordering::Release);
-    control.paused.store(false, std::sync::atomic::Ordering::Release);
+    if control.active_task_id.load(std::sync::atomic::Ordering::Acquire) != task_id {
+        control.active_task_id.store(task_id, std::sync::atomic::Ordering::Release);
+        control.cancelled.store(false, std::sync::atomic::Ordering::Release);
+        control.paused.store(false, std::sync::atomic::Ordering::Release);
+    }
+    if control.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("下载任务已取消。".into());
+    }
+    control.running.store(true, std::sync::atomic::Ordering::Release);
+    let _execution_guard = DownloadExecutionGuard(&control);
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let cookie = store.cookie()?;
     if crate::auth::check_cookie_availability(&cookie).await? != "valid" {
