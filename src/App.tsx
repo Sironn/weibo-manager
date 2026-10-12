@@ -343,6 +343,7 @@ function App() {
     }
   };
   useEffect(() => { try { const saved = localStorage.getItem("wm-task-concurrency"); if (saved && ["1", "2", "3", "5"].includes(saved)) setConcurrency(saved); } catch { /* 使用默认并发数 */ } }, []);
+  useEffect(() => { scheduleWaitingDownloadRef.current(); }, [concurrency]);
   const saveRequestInterval = async (config: RequestIntervalConfig) => {
     try {
       const saved = await invoke<RequestIntervalConfig>("save_request_interval", { config });
