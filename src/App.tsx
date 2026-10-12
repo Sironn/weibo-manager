@@ -121,6 +121,10 @@ function App() {
   const [appliedDownloadDateTo, setAppliedDownloadDateTo] = useState("");
   const [appliedDownloadMediaType, setAppliedDownloadMediaType] = useState("all");
   const [downloadBusy, setDownloadBusy] = useState(false);
+  const activeDownloadIds = useRef<Set<number>>(new Set());
+  const tasksRef = useRef<Task[]>([]);
+  tasksRef.current = tasks;
+  const scheduleWaitingDownloadRef = useRef<() => void>(() => {});
   const [downloadStatus, setDownloadStatus] = useState("");
   const [downloadError, setDownloadError] = useState("");
   const [concurrency, setConcurrency] = useState("3");
