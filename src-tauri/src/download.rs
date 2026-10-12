@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{fs, path::{Path, PathBuf}, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 #[derive(Default)]
 pub struct DownloadControl {
@@ -65,28 +66,14 @@ fn task_db(app: &AppHandle) -> Result<Connection, String> {
     Ok(db)
 }
 #[tauri::command]
-pub fn select_download_directory() -> Result<Option<String>, String> {
-    #[cfg(target_os = "windows")]
-    {
-        let script = "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = '选择微博媒体下载目录'; if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { [Console]::Write($d.SelectedPath) }";
-        let output = std::process::Command::new("powershell.exe").args(["-NoProfile", "-STA", "-Command", script]).output()
-            .map_err(|e| format!("无法打开系统目录选择窗口：{e}"))?;
-        if !output.status.success() { return Err("系统目录选择窗口打开失败。".into()); }
-        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let output = std::process::Command::new("osascript").args(["-e", "POSIX path of (choose folder with prompt \"选择微博媒体下载目录\")"]).output()
-            .map_err(|e| format!("无法打开系统目录选择窗口：{e}"))?;
-        if !output.status.success() { return Ok(None); }
-        let path = String::from_utf8_lossy(&output.stdout).trim().trim_end_matches('/').to_string();
-        return Ok(if path.is_empty() { None } else { Some(path) });
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        Err("当前平台暂不支持原生目录选择。".into())
-    }
+pub fn select_download_directory(app: AppHandle) -> Result<Option<String>, String> {
+    let selected = app.dialog().file().blocking_pick_folder();
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let path = selected.into_path()
+        .map_err(|e| format!("无法读取所选目录：{e}"))?;
+    Ok(Some(path.to_string_lossy().into_owned()))
 }
 
 #[tauri::command]
