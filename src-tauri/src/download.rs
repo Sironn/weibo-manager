@@ -168,13 +168,13 @@ pub fn save_download_task(app: AppHandle, task: DownloadTaskRecord) -> Result<()
 }
 #[tauri::command]
 pub fn remove_download_tasks(app: AppHandle, task_ids: Vec<u64>, control: State<'_, DownloadControl>) -> Result<Vec<u64>, String> {
-    let active_task_id = control.active_task_id.load(std::sync::atomic::Ordering::Acquire);
-    if active_task_id != 0 && task_ids.contains(&active_task_id) {
-        control.cancelled.store(true, std::sync::atomic::Ordering::Release);
-        control.paused.store(false, std::sync::atomic::Ordering::Release);
-        while control.running.load(std::sync::atomic::Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(50));
-        }
+    let active_controls = task_ids.iter().map(|id| (*id, task_control(&control, *id))).collect::<Vec<_>>();
+    for (_, task) in &active_controls {
+        task.cancelled.store(true, std::sync::atomic::Ordering::Release);
+        task.paused.store(false, std::sync::atomic::Ordering::Release);
+    }
+    for (_, task) in &active_controls {
+        while task.running.load(std::sync::atomic::Ordering::Acquire) { std::thread::sleep(Duration::from_millis(50)); }
     }
     let mut db = task_db(&app)?;
     let tx = db.transaction().map_err(|e| format!("开始删除下载任务事务失败：{e}"))?;
@@ -399,16 +399,10 @@ pub async fn download_media(
     modify_file_time: bool,
     control: State<'_, DownloadControl>,
 ) -> Result<Vec<DownloadSummary>, String> {
-    if control.active_task_id.load(std::sync::atomic::Ordering::Acquire) != task_id {
-        control.active_task_id.store(task_id, std::sync::atomic::Ordering::Release);
-        control.cancelled.store(false, std::sync::atomic::Ordering::Release);
-        control.paused.store(false, std::sync::atomic::Ordering::Release);
-    }
-    if control.cancelled.load(std::sync::atomic::Ordering::Acquire) {
-        return Err("下载任务已取消。".into());
-    }
-    control.running.store(true, std::sync::atomic::Ordering::Release);
-    let _execution_guard = DownloadExecutionGuard(&control);
+    let task_control = task_control(&control, task_id);
+    if task_control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
+    task_control.running.store(true, std::sync::atomic::Ordering::Release);
+    let _execution_guard = DownloadExecutionGuard(task_control.clone());
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let cookie = store.cookie()?;
     if crate::auth::check_cookie_availability(&cookie).await? != "valid" {
@@ -442,7 +436,7 @@ pub async fn download_media(
         let mut total = 0usize;
 
         loop {
-            wait_download_resume(&control).await?;
+            wait_download_resume(&task_control).await?;
             if page > 100 { break; }
             let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}");
             let mut request = client.get(&endpoint)
@@ -501,7 +495,7 @@ pub async fn download_media(
                 }
                 let mut media = extract_media(&card, media_filter);
                 for (url, kind, ext) in media.drain(..) {
-                    wait_download_resume(&control).await?;
+                    wait_download_resume(&task_control).await?;
                     total += 1;
                     let filename = replace_template(&file_template, &display_name, &post_time, &post_id, total, &ext);
                     let target = user_folder.join(filename);
