@@ -149,7 +149,7 @@ function App() {
     setPostsLoading(false);
     setPosts([]);
     setPostChecks({});
-    setPostsError("");
+    setPostsError("尚未登录微博，请先扫码登录或导入 Cookie。");
     setPostsPaused(false);
     setPostsCancelling(false);
     setDateFrom("");
