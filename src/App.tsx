@@ -571,16 +571,33 @@ function App() {
     } catch (reason) { notify(`创建下载任务失败：${String(reason)}`); }
   };
   const executeDownloadTask = async (task: Task) => {
-    if (task.kind !== "下载" || !task.downloadConfig || downloadBusy) return;
+    if (task.kind !== "下载" || !task.downloadConfig || activeDownloadIds.current.has(task.id)) return;
+    const limit = Math.max(1, Number(concurrency) || 1);
+    if (activeDownloadIds.current.size >= limit) {
+      const waitingTask = { ...task, state: "等待中" as TaskState, detail: "等待下载并发名额" };
+      setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
+      try { await invoke("save_download_task", { task: waitingTask }); } catch (reason) { log("error", "download", `保存等待任务状态失败：${String(reason)}`); }
+      return;
+    }
+    activeDownloadIds.current.add(task.id);
+    setDownloadBusy(true);
     const valid = await refreshDownloadCookieValidity();
-    if (!valid) { notify("Cookie 不可用，无法启动下载任务。"); return; }
+    if (!valid) {
+      activeDownloadIds.current.delete(task.id);
+      setDownloadBusy(activeDownloadIds.current.size > 0);
+      scheduleWaitingDownloadRef.current();
+      notify("Cookie 不可用，无法启动下载任务。");
+      return;
+    }
     try {
       await invoke("prepare_download_task", { taskId: task.id });
     } catch (reason) {
+      activeDownloadIds.current.delete(task.id);
+      setDownloadBusy(activeDownloadIds.current.size > 0);
+      scheduleWaitingDownloadRef.current();
       notify(`准备下载任务失败：${String(reason)}`);
       return;
     }
-    setDownloadBusy(true);
     const startedTask = { ...task, state: "执行中" as TaskState, progress: 1, detail: "正在读取微博数据并下载媒体" };
     setTasks(current => current.map(item => item.id === task.id ? startedTask : item));
     try { await invoke("save_download_task", { task: startedTask }); } catch (reason) { log("error", "download", `保存下载任务状态失败：${String(reason)}`); }
