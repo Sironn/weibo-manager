@@ -203,3 +203,55 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 
 .inline-toggle { display:flex; align-items:center; gap:8px; font-size:11px; color:var(--muted); }
 .inline-toggle input { flex:0 0 auto; }
+
+
+/* 阶段 4：下载筛选条件与任务中心表格紧凑布局。 */
+.download-form-grid {
+  grid-template-columns: minmax(118px, .72fr) minmax(118px, .72fr) minmax(155px, 1fr) minmax(205px, 1.45fr) minmax(125px, .72fr);
+  align-items: end;
+  gap: 10px;
+  padding-top: 14px;
+}
+.download-form-grid .field { min-width: 0; }
+.download-form-grid .field input[type="date"] { padding: 8px 6px; font-size: 10px; }
+.download-form-grid .input-with-button { display: flex; min-width: 0; gap: 6px; }
+.download-form-grid .input-with-button input { min-width: 0; padding: 8px 7px; }
+.download-form-grid .input-with-button .icon-button { flex: 0 0 34px; }
+.download-form-grid .switch-control { align-self: stretch; display: flex; align-items: center; min-height: 34px; }
+.download-filter-foot { margin: 14px 0 0; padding: 14px 20px 0; }
+.download-user-panel { padding-bottom: 18px; }
+.switch-control { position: relative; display: inline-flex; align-items: center; cursor: pointer; width: 38px; height: 22px; }
+.switch-control input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch-track { display: inline-flex; align-items: center; width: 38px; height: 22px; border-radius: 999px; background: #c9ced8; transition: background .16s ease; }
+.switch-thumb { display: block; width: 16px; height: 16px; margin-left: 3px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0002; transition: transform .16s ease; }
+.switch-control input:checked + .switch-track { background: #526bd7; }
+.switch-control input:checked + .switch-track .switch-thumb { transform: translateX(16px); }
+.switch-control input:focus-visible + .switch-track { outline: 2px solid #8ea0ed; outline-offset: 2px; }
+
+.task-list-scroll table { min-width: 980px; table-layout: fixed; }
+.task-list-scroll thead th { text-align: center; }
+.task-list-scroll th, .task-list-scroll td { padding: 7px 8px; vertical-align: middle; }
+.task-list-scroll th:nth-child(1), .task-list-scroll td:nth-child(1) { width: 42px; text-align: center; }
+.task-list-scroll th:nth-child(2), .task-list-scroll td:nth-child(2) { width: 22%; }
+.task-list-scroll th:nth-child(3), .task-list-scroll td:nth-child(3) { width: 68px; text-align: center; }
+.task-list-scroll th:nth-child(4), .task-list-scroll td:nth-child(4) { width: 86px; text-align: center; }
+.task-list-scroll th:nth-child(5), .task-list-scroll td:nth-child(5) { width: 112px; }
+.task-list-scroll th:nth-child(6), .task-list-scroll td:nth-child(6) { width: 240px; }
+.task-list-scroll th:nth-child(7), .task-list-scroll td:nth-child(7) { width: 92px; text-align: center; }
+.task-list-scroll th:nth-child(8), .task-list-scroll td:nth-child(8) { width: 58px; text-align: center; }
+.task-detail-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-operation-actions { display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; gap: 3px; margin: 0; }
+.task-operation-actions .task-action-icon { width: 29px; height: 29px; flex: 0 0 29px; }
+.task-action-icon.icon-tooltip { position: relative; }
+.task-action-icon.icon-tooltip::after { content: attr(data-tooltip); position: absolute; z-index: 30; left: 50%; bottom: calc(100% + 7px); transform: translate(-50%,3px); padding: 5px 8px; border-radius: 5px; background: #27324a; color: #fff; font-size: 10px; font-weight: 500; line-height: 1.4; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s ease,transform .12s ease,visibility .12s ease; }
+.task-action-icon.icon-tooltip:hover::after, .task-action-icon.icon-tooltip:focus-visible::after { opacity: 1; visibility: visible; transform: translate(-50%,0); }
+
+@media (max-width: 1120px) {
+  .download-form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .download-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .download-filter-foot { align-items: flex-start; flex-direction: column; }
+  .download-filter-foot > span { white-space: normal; overflow-wrap: anywhere; }
+  .download-filter-foot .account-actions { margin-left: 0; }
+}
