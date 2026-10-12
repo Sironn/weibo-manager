@@ -81,7 +81,7 @@ fn task_db(app: &AppHandle) -> Result<Connection, String> {
     Ok(db)
 }
 #[tauri::command]
-pub fn select_download_directory(app: AppHandle) -> Result<Option<String>, String> {
+pub async fn select_download_directory(app: AppHandle) -> Result<Option<String>, String> {
     let selected = app.dialog().file().blocking_pick_folder();
     let Some(selected) = selected else {
         return Ok(None);
