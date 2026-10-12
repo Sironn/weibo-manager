@@ -283,3 +283,8 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .download-form-grid .input-with-button input { width: 100%; min-width: 0; padding: 7px 4px !important; }
 .switch-control { white-space: nowrap; }
 @media (max-width: 1120px) { .download-form-grid { grid-template-columns: minmax(0, .75fr) minmax(0, .75fr) minmax(0, .9fr) minmax(0, 1.2fr) minmax(0, .8fr) !important; } }
+
+/* 所有任务内容恢复左对齐，复选框保留居中。 */
+.task-list-scroll td { text-align: left !important; }
+.task-list-scroll th:nth-child(1), .task-list-scroll td:nth-child(1) { text-align: center !important; }
+.task-list-scroll th:nth-child(7), .task-list-scroll td:nth-child(7), .task-list-scroll th:nth-child(8), .task-list-scroll td:nth-child(8) { text-align: left !important; }
