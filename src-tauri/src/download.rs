@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::{fs, path::{Path, PathBuf}, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
+#[cfg(target_os = "windows")]
+use std::os::windows::fs::FileTimesExt;
 
 #[derive(Default)]
 pub struct DownloadControl {
