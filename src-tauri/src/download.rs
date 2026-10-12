@@ -302,6 +302,39 @@ fn extract_media(post: &Value, requested_type: &str) -> Vec<(String, String, Str
     found
 }
 
+fn apply_file_times(path: &Path, post_time: &DateTime<chrono::FixedOffset>) -> Result<String, String> {
+    let date_text = post_time.format("%Y-%m-%d %H:%M:%S").to_string();
+    #[cfg(target_os = "windows")]
+    {
+        let script = "$p=$env:WM_TARGET_PATH; $t=[DateTime]::ParseExact($env:WM_POST_TIME,'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture); $f=Get-Item -LiteralPath $p; $f.CreationTime=$t; $f.LastWriteTime=$t; $f.LastAccessTime=$t";
+        let output = std::process::Command::new("powershell.exe").args(["-NoProfile", "-Command", script])
+            .env("WM_TARGET_PATH", path)
+            .env("WM_POST_TIME", &date_text)
+            .output().map_err(|e| format!("启动系统文件时间设置失败：{e}"))?;
+        if output.status.success() { return Ok("已设置创建、修改和访问时间".into()); }
+        return Err(format!("Windows 未能设置全部文件时间：{}", String::from_utf8_lossy(&output.stderr).trim()));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let stamp = post_time.format("%Y%m%d%H%M.%S").to_string();
+        let touch = std::process::Command::new("touch").args(["-a", "-m", "-t", &stamp]).arg(path).status()
+            .map_err(|e| format!("设置访问和修改时间失败：{e}"))?;
+        if !touch.success() { return Err("系统未能设置文件访问和修改时间".into()); }
+        let setfile_date = post_time.format("%m/%d/%Y %H:%M:%S").to_string();
+        match std::process::Command::new("SetFile").args(["-d", &setfile_date, "-m", &setfile_date]).arg(path).status() {
+            Ok(status) if status.success() => Ok("已设置创建、修改和访问时间".into()),
+            _ => Ok("已设置访问和修改时间；系统未提供可用的 SetFile，创建时间未修改".into()),
+        }
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let file_time: std::time::SystemTime = (*post_time).into();
+        fs::File::open(path).and_then(|file| file.set_modified(file_time))
+            .map_err(|e| format!("设置文件修改时间失败：{e}"))?;
+        Ok("已设置修改时间；当前平台未统一设置创建和访问时间".into())
+    }
+}
+
 #[tauri::command]
 pub async fn download_media(
     app: AppHandle,
@@ -439,14 +472,9 @@ pub async fn download_media(
                                     if modify_file_time {
                                         let post_time_value = post.get("created_at").and_then(Value::as_str).and_then(|raw| DateTime::parse_from_str(raw, "%a %b %d %H:%M:%S %z %Y").ok());
                                         if let Some(timestamp) = post_time_value {
-                                            let file_time: std::time::SystemTime = timestamp.into();
-                                            match fs::File::open(&target).and_then(|file| file.set_modified(file_time)) {
-                                                Ok(()) => {
-                                                    let _ = write_log(&app, "INFO", "download", "已将文件修改时间设为微博发布时间；当前实现未修改创建时间和访问时间（标准库不支持跨平台统一设置）");
-                                                }
-                                                Err(error) => {
-                                                    let _ = write_log(&app, "WARN", "download", &format!("设置文件修改时间失败，已保留系统时间：{error}"));
-                                                }
+                                            match apply_file_times(&target, &timestamp) {
+                                                Ok(message) => { let _ = write_log(&app, "INFO", "download", &format!("微博文件时间处理结果：{message}")); }
+                                                Err(error) => { let _ = write_log(&app, "WARN", "download", &format!("设置微博文件时间失败，保留系统支持的默认值：{error}")); }
                                             }
                                         } else {
                                             let _ = write_log(&app, "WARN", "download", "微博接口未返回可解析的完整发布时间，文件时间保留系统时间");
