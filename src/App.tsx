@@ -575,12 +575,16 @@ function App() {
       log(state === "失败" ? "error" : "info", "download", detail);
     } catch (reason) {
       const detail = String(reason);
-      const failedTask = { ...startedTask, state: "失败" as TaskState, progress: 100, detail };
-      setTasks(current => current.map(item => item.id === task.id ? failedTask : item));
-      try { await invoke("save_download_task", { task: failedTask }); } catch (saveReason) { log("error", "download", `保存失败任务状态失败：${String(saveReason)}`); }
-      setDownloadStatus(`下载失败：${detail}`);
-      notify(`下载失败：${detail}`);
-      log("error", "download", detail);
+      if (detail.includes("下载任务已取消")) {
+        log("info", "download", `任务 ${task.id} 已取消，按任务删除请求停止执行。`);
+      } else {
+        const failedTask = { ...startedTask, state: "失败" as TaskState, progress: 100, detail };
+        setTasks(current => current.map(item => item.id === task.id ? failedTask : item));
+        try { await invoke("save_download_task", { task: failedTask }); } catch (saveReason) { log("error", "download", `保存失败任务状态失败：${String(saveReason)}`); }
+        setDownloadStatus(`下载失败：${detail}`);
+        notify(`下载失败：${detail}`);
+        log("error", "download", detail);
+      }
     } finally {
       setDownloadBusy(false);
     }
