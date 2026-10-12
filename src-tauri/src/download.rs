@@ -208,7 +208,7 @@ pub async fn download_media(
                 let mut media = extract_media(&card, media_filter);
                 for (url, kind, ext) in media.drain(..) {
                     total += 1;
-                    let filename = replace_template(&file_template, &display_name, &post_date, post_id, total, &ext);
+                    let filename = replace_template(&file_template, &display_name, &post_date, &post_id, total, &ext);
                     let target = user_folder.join(filename);
                     if target.exists() {
                         skipped += 1;
