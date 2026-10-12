@@ -328,7 +328,7 @@ fn apply_file_times(path: &Path, post_time: &DateTime<chrono::FixedOffset>) -> R
     }
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
     {
-        let file_time: std::time::SystemTime = (*post_time).into();
+        let file_time: std::time::SystemTime = post_time.to_owned().into();
         fs::File::open(path).and_then(|file| file.set_modified(file_time))
             .map_err(|e| format!("设置文件修改时间失败：{e}"))?;
         Ok("已设置修改时间；当前平台未统一设置创建和访问时间".into())
