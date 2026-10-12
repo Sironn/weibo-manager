@@ -649,8 +649,6 @@ function App() {
               saveFilenameSettings({...filenameSettings, [key]: filenameSettings[key] + variable.token});
             }}><code>{variable.token}</code><span>{variable.label}</span></button>)}</div>
           </div>
-          <div className="template-preview-text"><span>文件夹名称预览：</span><code>{previewFoldername}</code></div>
-          <div className="template-preview-text"><span>文件名预览：</span><code>{previewFilename}</code></div>
         </section>
         <section className="panel settings-section" id="settings-security">
           <div className="panel-title"><div><strong>安全与数据</strong><span>本地下载目录与数据行为</span></div></div>
