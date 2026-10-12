@@ -16,11 +16,12 @@ import {
 type Page = "dashboard" | "accounts" | "delete" | "download" | "tasks" | "settings";
 type TaskState = "执行中" | "等待中" | "已暂停" | "已完成" | "失败" | "已取消";
 type DeletePostResult = { postId: string; state: string; detail: string };
+type DownloadSummary = { user: string; downloaded: number; skipped: number; failed: number; detail: string };
 type DownloadTaskConfig = { users: string[]; downloadDir: string; dateFrom: string; dateTo: string; mediaType: string; fileTemplate: string; folderTemplate: string; modifyFileTime: boolean };
-type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string; postIds?: string[]; dateFrom?: string; dateTo?: string; keyword?: string; postType?: string; results?: DeletePostResult[]; downloadConfig?: DownloadTaskConfig };
+type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string; postIds?: string[]; dateFrom?: string; dateTo?: string; keyword?: string; postType?: string; results?: DeletePostResult[]; downloadConfig?: DownloadTaskConfig; downloadResults?: DownloadSummary[] };
 type WeiboPost = { id: string; date: string; createdAt: string; kind: string; text: string; media: string };
 type PersistedDeleteTask = { id: number; title: string; kind: string; state: TaskState; progress: number; detail: string; createdAt: string; postIds: string[]; dateFrom: string; dateTo: string; keyword: string; postType: string; results?: DeletePostResult[] };
-type PersistedDownloadTask = { id: number; title: string; state: TaskState; progress: number; detail: string; createdAt: string; downloadConfig: DownloadTaskConfig };
+type PersistedDownloadTask = { id: number; title: string; state: TaskState; progress: number; detail: string; createdAt: string; downloadConfig: DownloadTaskConfig; downloadResults?: DownloadSummary[] };
 type RequestIntervalConfig = { mode: "fixed" | "random"; fixedMs: number; minMs: number; maxMs: number };
 const nav: { id: Page; label: string; icon: typeof Home; group: string }[] = [
   { id: "dashboard", label: "工作台", icon: Home, group: "概览" },
@@ -228,7 +229,7 @@ function App() {
         invoke<PersistedDownloadTask[]>("get_download_tasks"),
       ]);
       const deleteTasks: Task[] = savedDeletes.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }));
-      const downloadTasks: Task[] = savedDownloads.map(task => ({ ...task, kind: "下载", downloadConfig: task.downloadConfig }));
+      const downloadTasks: Task[] = savedDownloads.map(task => ({ ...task, kind: "下载", downloadConfig: task.downloadConfig, downloadResults: task.downloadResults ?? [] }));
       const all = [...downloadTasks, ...deleteTasks].sort((a,b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
       setTasks(all);
       setSelectedTaskIds(current => current.filter(id => all.some(task => task.id === id)));
@@ -579,7 +580,7 @@ function App() {
       const state: TaskState = failed > 0 && downloaded === 0 ? "失败" : "已完成";
       const total = downloaded + skipped + failed;
       const detail = `下载 ${total}，成功 ${downloaded}，跳过 ${skipped}，失败 ${failed}`;
-      const finishedTask = { ...startedTask, state, progress: 100, detail };
+      const finishedTask = { ...startedTask, state, progress: 100, detail, downloadResults: results };
       setTasks(current => current.map(item => item.id === task.id ? finishedTask : item));
       await invoke("save_download_task", { task: finishedTask });
       setDownloadStatus(results.map(item => `${item.user}：${item.detail}`).join("；") || detail);
@@ -691,6 +692,7 @@ function App() {
           {moreTask.downloadConfig && <div><strong>目标用户：</strong><div style={{display:"grid",gap:5,marginTop:6}}>{moreTask.downloadConfig.users.map((user, index) => <div key={user + index}>{index + 1}. {user}</div>)}</div></div>}
           {moreTask.downloadConfig && <div><strong>筛选条件：</strong><div style={{display:"grid",gap:5,marginTop:6}}><div>开始日期：{moreTask.downloadConfig.dateFrom || "不限"}</div><div>结束日期：{moreTask.downloadConfig.dateTo || "不限"}</div><div>媒体类型：{moreTask.downloadConfig.mediaType === "all" ? "全部媒体" : moreTask.downloadConfig.mediaType === "images" ? "仅图片" : moreTask.downloadConfig.mediaType === "videos" ? "仅视频" : "仅 LivePhoto"}</div></div></div>}
           {moreTask.downloadConfig && <div><strong>下载设置：</strong><div style={{display:"grid",gap:5,marginTop:6}}><div>下载目录：{moreTask.downloadConfig.downloadDir}</div><div>修改创建日期：{moreTask.downloadConfig.modifyFileTime ? "开启" : "关闭"}</div><div>文件夹模板：{moreTask.downloadConfig.folderTemplate}</div><div>文件名模板：{moreTask.downloadConfig.fileTemplate}</div></div></div>}
+          {moreTask.downloadResults && moreTask.downloadResults.length > 0 && <div><strong>逐用户结果：</strong><div style={{display:"grid",gap:8,marginTop:6}}>{moreTask.downloadResults.map((item, index) => <div key={item.user + index}><div>{item.user}</div><div>下载 {item.downloaded + item.skipped + item.failed}，成功 {item.downloaded}，跳过 {item.skipped}，失败 {item.failed}</div>{item.detail.trim() && <div>{item.detail}</div>}</div>)}</div></div>}
         </div></div></div>}
             {deleteActionTask && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-action-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-action-title">{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "确认重试删除任务" : "确认执行删除任务"}</h3><p>{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "任务“" + deleteActionTask.title + "”此前未完整完成。重试时会跳过已确认删除成功的微博，只处理失败或未处理项目。" : "即将向微博发送真实删除请求。任务“" + deleteActionTask.title + "”将逐条执行删除操作。"}</p><div className="warning-box">微博删除不可恢复，请确认任务内容后继续。</div><div className="modal-actions"><button className="button ghost" onClick={() => setDeleteActionTask(null)}>取消</button><button className="button danger" onClick={() => void confirmDeleteTask()}>确认执行</button></div></div></div>}
             {showDeleteTasksConfirm && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-tasks-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-tasks-title">确认删除任务记录</h3><p>确定删除选中的 {selectedTaskCount} 条任务记录吗？删除任务记录不会撤销已经在微博执行的删除操作。</p><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteTasksConfirm(false)}>取消</button><button className="button danger" onClick={() => void removeSelectedTasks()}>确认删除</button></div></div></div>}
