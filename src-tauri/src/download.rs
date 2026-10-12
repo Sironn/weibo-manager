@@ -1,5 +1,5 @@
 use crate::{auth::SessionStore, logger::write_log, settings};
-use chrono::{DateTime, FixedOffset, Local};
+use chrono::DateTime;
 use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
 use serde::Serialize;
 use serde_json::Value;
@@ -186,10 +186,13 @@ pub async fn download_media(
                 return Err(format!("读取用户 {uid} 失败：微博接口未返回成功结果，请检查 Cookie 或 UID。"));
             }
             let cards = body.pointer("/data/cards").and_then(Value::as_array).cloned().unwrap_or_default();
+            let cards_empty = cards.is_empty();
             let mut posts_this_page = 0usize;
             for card in cards {
                 let Some(post) = card.get("mblog") else { continue; };
-                let post_id = post.get("id").and_then(Value::as_str).or_else(|| post.get("id").and_then(Value::as_i64).map(|_| "")).unwrap_or("");
+                let post_id = post.get("id").and_then(Value::as_str).map(str::to_string)
+                    .or_else(|| post.get("id").and_then(Value::as_i64).map(|id| id.to_string()))
+                    .unwrap_or_default();
                 if post_id.is_empty() { continue; }
                 let post_date = post.get("created_at").and_then(Value::as_str).and_then(parse_post_date).unwrap_or_default();
                 if !date_from.is_empty() && !post_date.is_empty() && post_date < date_from { continue; }
@@ -204,7 +207,7 @@ pub async fn download_media(
                 for (url, kind, ext) in media.drain(..) {
                     total += 1;
                     let filename = replace_template(&file_template, &display_name, &post_date, post_id, total, &ext);
-                    let mut target = user_folder.join(filename);
+                    let target = user_folder.join(filename);
                     if target.exists() {
                         skipped += 1;
                         continue;
@@ -244,9 +247,10 @@ pub async fn download_media(
                 posts_this_page += 1;
             }
             if posts_this_page == 0 { empty_pages += 1; } else { empty_pages = 0; }
-            if empty_pages >= 2 || cards.is_empty() { break; }
+            if empty_pages >= 2 || cards_empty { break; }
             page += 1;
-            tokio::time::sleep(Duration::from_millis(settings::request_delay_ms(&app))).await;
+            let delay = Duration::from_millis(settings::request_delay_ms(&app));
+            let _ = tauri::async_runtime::spawn_blocking(move || std::thread::sleep(delay)).await;
         }
         summaries.push(DownloadSummary {
             user: display_name.clone(), downloaded, skipped, failed,
