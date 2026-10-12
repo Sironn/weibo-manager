@@ -56,11 +56,8 @@ fn user_id_from_input(input: &str) -> Result<String, String> {
     if !matches!(url.host_str(), Some("m.weibo.cn" | "weibo.cn" | "www.weibo.cn" | "weibo.com")) {
         return Err("目前只支持微博主页链接或 UID。".into());
     }
-    let id = url.path_segments().and_then(|mut segments| segments.find(|s| !s.is_empty()))
-        .ok_or_else(|| "无法从微博主页链接中读取 UID。".to_string())?;
-    if !id.chars().all(|c| c.is_ascii_digit()) {
-        return Err("微博主页链接中未找到数字 UID；请直接输入 UID。".into());
-    }
+    let id = url.path_segments().and_then(|segments| segments.filter(|s| !s.is_empty()).find(|s| s.chars().all(|c| c.is_ascii_digit())))
+        .ok_or_else(|| "微博主页链接中未找到数字 UID；请直接输入 UID。".to_string())?;
     Ok(id.to_string())
 }
 
@@ -163,15 +160,15 @@ pub async fn download_media(
         let mut skipped = 0usize;
         let mut failed = 0usize;
         let mut page = 1usize;
+        let mut since_id = String::new();
         let mut empty_pages = 0usize;
         let mut display_name = uid.clone();
         let mut user_folder = root.join(safe_name(&replace_template(&folder_template, &uid, "", "", 0, "")));
-        fs::create_dir_all(&user_folder).map_err(|e| format!("无法创建用户目录：{e}"))?;
         let mut total = 0usize;
 
         loop {
             if page > 100 { break; }
-            let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}&page={page}");
+            let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}&since_id={since_id}");
             let response = client.get(&endpoint)
                 .header(COOKIE, &cookie)
                 .header(REFERER, "https://m.weibo.cn/")
@@ -185,8 +182,13 @@ pub async fn download_media(
             if body.get("ok").and_then(Value::as_i64) != Some(1) {
                 return Err(format!("读取用户 {uid} 失败：微博接口未返回成功结果，请检查 Cookie 或 UID。"));
             }
+            let next_since_id = body.pointer("/data/cardlistInfo/since_id").and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| body.pointer("/data/cardlistInfo/since_id").and_then(Value::as_i64).map(|id| id.to_string()))
+                .unwrap_or_default();
             let cards = body.pointer("/data/cards").and_then(Value::as_array).cloned().unwrap_or_default();
             let cards_empty = cards.is_empty();
+            let cursor_unchanged = !next_since_id.is_empty() && next_since_id == since_id;
             let mut posts_this_page = 0usize;
             for card in cards {
                 let Some(post) = card.get("mblog") else { continue; };
@@ -247,7 +249,8 @@ pub async fn download_media(
                 posts_this_page += 1;
             }
             if posts_this_page == 0 { empty_pages += 1; } else { empty_pages = 0; }
-            if empty_pages >= 2 || cards_empty { break; }
+            if empty_pages >= 2 || cards_empty || next_since_id.is_empty() || cursor_unchanged { break; }
+            since_id = next_since_id;
             page += 1;
             let delay = Duration::from_millis(settings::request_delay_ms(&app));
             let _ = tauri::async_runtime::spawn_blocking(move || std::thread::sleep(delay)).await;
