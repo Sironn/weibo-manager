@@ -19,6 +19,7 @@ pub fn run() {
             let handle = app.handle().clone();
             let saved_settings = settings::load_with_migration(&handle);
             app.manage(delete::DeleteSearchControl::default());
+            app.manage(download::DownloadControl::default());
             // 启动时从独立配置文件恢复 Cookie；Cookie 不写入日志。
             app.manage(auth::SessionStore::from_saved_cookie(saved_settings.cookie.clone()));
             if let Some(window) = app.get_webview_window("main") {
@@ -60,6 +61,8 @@ pub fn run() {
             download::get_download_tasks,
             download::save_download_task,
             download::remove_download_tasks,
+            download::set_download_paused,
+            download::cancel_download,
             delete::get_delete_posts,
             delete::set_delete_search_paused,
             delete::set_delete_search_cancelled,
