@@ -58,6 +58,16 @@ const initialFilenameSettings: FilenameSettings = (() => {
     return defaultFilenameSettings;
   }
 })();
+function extractWeiboUid(input: string): string {
+  const value = input.trim();
+  if (/^\d+$/.test(value)) return value;
+  try {
+    const parsed = new URL(value);
+    const pathUid = parsed.pathname.split("/").filter(Boolean).find(part => /^\d+$/.test(part));
+    const queryUid = parsed.searchParams.get("uid") || parsed.searchParams.get("id");
+    return pathUid || (queryUid && /^\d+$/.test(queryUid) ? queryUid : "");
+  } catch { return ""; }
+}
 function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [dark, setDark] = useState(false);
@@ -92,6 +102,7 @@ function App() {
   const [deleteActionTask, setDeleteActionTask] = useState<Task | null>(null);
   const [moreTask, setMoreTask] = useState<Task | null>(null);
   const [users, setUsers] = useState<string[]>([]);
+  const [userLabels, setUserLabels] = useState<Record<string, string>>({});
   const [newUser, setNewUser] = useState("");
   // 文件名与文件夹名模板分别保存；当前阶段只演示模板配置，不执行真实下载。
   const [filenameSettings, setFilenameSettings] = useState<FilenameSettings>(initialFilenameSettings);
@@ -486,6 +497,18 @@ function App() {
       notify(`创建任务失败：${message}`);
     }
   };
+  const addDownloadUser = async () => {
+    const input = newUser.trim();
+    if (!input) return;
+    setUsers(current => [...current, input]);
+    setNewUser("");
+    if (cookieValidity === "valid") {
+      try {
+        const resolved = await invoke<{ uid: string; screenName: string | null }>("resolve_download_user", { userInput: input });
+        if (resolved.screenName) setUserLabels(current => ({ ...current, [input]: resolved.screenName! }));
+      } catch (reason) { log("info", "download", `用户昵称暂不可用，保留 UID 回退显示：${String(reason)}`); }
+    }
+  };
   const createDownloadTask = async () => {
     const valid = await refreshDownloadCookieValidity();
     if (!valid) { notify("请先登录微博并确认 Cookie 可用。"); return; }
@@ -613,8 +636,8 @@ function App() {
       <div className="stats-grid three"><Stat label="待处理用户" value={String(users.length)} icon={Users}/><Stat label="下载任务" value={String(tasks.filter(t => t.kind === "下载").length)} icon={Image} /><Stat label="下载完成" value={String(tasks.filter(t => t.kind === "下载" && t.state === "已完成").length)} icon={Check} /></div>
       <div className="panel download-user-panel">
         <div className="panel-title"><div><strong>目标用户队列</strong><span>支持添加多个用户并排队，日期留空表示不限时间。</span></div><span className="tag blue">{users.length} 个用户</span></div>
-        <div className="add-user-row"><div className="input-icon"><Users size={16}/><input placeholder="微博主页链接或用户标识" value={newUser} onChange={e => setNewUser(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newUser.trim()) { setUsers(u => [...u, newUser.trim()]); setNewUser(""); } }} /></div><button className="button secondary" onClick={() => { if (newUser.trim()) { setUsers(u => [...u, newUser.trim()]); setNewUser(""); } }} disabled={!newUser.trim()}><Plus size={15}/> 添加用户</button></div>
-        <div className="user-list">{users.map((user, i) => <div className="user-row" key={user + i}><div className="avatar">{user.slice(0, 1).toUpperCase()}</div><div className="user-info"><strong>用户名 UID: {user.match(/\d+/)?.[0] ?? "待识别"}</strong><span>待采集 · {user.match(/\d+/)?.[0] ? "UID 已识别" : "请确认输入的是 UID 或微博主页链接"}</span></div><span className="tag neutral">队列 {i + 1}</span><button className="icon-button" aria-label="移除用户" onClick={() => setUsers(u => u.filter((_, index) => index !== i))}><X size={16}/></button></div>)}</div>
+        <div className="add-user-row"><div className="input-icon"><Users size={16}/><input placeholder="微博主页链接或用户标识" value={newUser} onChange={e => setNewUser(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newUser.trim()) void addDownloadUser(); }} /></div><button className="button secondary" onClick={() => void addDownloadUser()} disabled={!newUser.trim()}><Plus size={15}/> 添加用户</button></div>
+        <div className="user-list">{users.map((user, i) => <div className="user-row" key={user + i}><div className="avatar">{user.slice(0, 1).toUpperCase()}</div><div className="user-info"><strong>{userLabels[user] ? `${userLabels[user]} UID: ${extractWeiboUid(user) || "待识别"}` : `用户名 UID: ${extractWeiboUid(user) || "待识别"}`}</strong><span>待采集 · {extractWeiboUid(user) ? "UID 已识别" : "请确认输入的是 UID 或微博主页链接"}</span></div><span className="tag neutral">队列 {i + 1}</span><button className="icon-button" aria-label="移除用户" onClick={() => setUsers(u => u.filter((_, index) => index !== i))}><X size={16}/></button></div>)}</div>
         <div className="divider-line"/><div className="form-grid"><Field label="开始日期"><input type="date" value={downloadDateFrom} onChange={e => setDownloadDateFrom(e.target.value)}/></Field><Field label="结束日期"><input type="date" value={downloadDateTo} onChange={e => setDownloadDateTo(e.target.value)}/></Field><Field label="媒体类型"><select value={downloadMediaType} onChange={e => setDownloadMediaType(e.target.value)}><option value="all">图片、视频、LivePhoto</option><option value="images">仅图片</option><option value="videos">仅视频</option><option value="livephoto">仅 LivePhoto</option></select></Field><Field label="下载目录"><div className="input-with-button"><input value={downloadPath} onChange={e => setDownloadPath(e.target.value)}/><button className="icon-button" onClick={() => void invoke<string | null>("select_download_directory").then(path => { if (path) setDownloadPath(path); }).catch(reason => notify(`选择下载目录失败：${String(reason)}`))} aria-label="选择下载目录" title="选择下载目录"><FolderOpen size={16}/></button></div></Field></div>
       </div>
       <div className="filter-foot download-filter-foot"><span>筛选条件：{downloadDateFrom || "不限"} 至 {downloadDateTo || "不限"} {downloadMediaType === "all" ? "全部媒体" : downloadMediaType === "images" ? "仅图片" : downloadMediaType === "videos" ? "仅视频" : "仅 LivePhoto"}</span><div className="account-actions"><button className="button primary" onClick={() => void createDownloadTask()} disabled={!users.length || downloadBusy}><Plus size={15}/> 创建下载任务</button></div></div>
