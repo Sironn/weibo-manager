@@ -290,16 +290,18 @@ fn extract_media(post: &Value, requested_type: &str) -> Vec<(String, String, Str
 }
 
 fn apply_file_times(path: &Path, post_time: &DateTime<chrono::FixedOffset>) -> Result<String, String> {
-    let date_text = post_time.format("%Y-%m-%d %H:%M:%S").to_string();
     #[cfg(target_os = "windows")]
     {
-        let script = "$p=$env:WM_TARGET_PATH; $t=[DateTime]::ParseExact($env:WM_POST_TIME,'yyyy-MM-dd HH:mm:ss',[Globalization.CultureInfo]::InvariantCulture); $f=Get-Item -LiteralPath $p; $f.CreationTime=$t; $f.LastWriteTime=$t; $f.LastAccessTime=$t";
-        let output = std::process::Command::new("powershell.exe").args(["-NoProfile", "-Command", script])
-            .env("WM_TARGET_PATH", path)
-            .env("WM_POST_TIME", &date_text)
-            .output().map_err(|e| format!("启动系统文件时间设置失败：{e}"))?;
-        if output.status.success() { return Ok("已设置创建、修改和访问时间".into()); }
-        return Err(format!("Windows 未能设置全部文件时间：{}", String::from_utf8_lossy(&output.stderr).trim()));
+        let file_time: SystemTime = post_time.to_owned().into();
+        let file = fs::File::open(path)
+            .map_err(|e| format!("打开文件以设置时间失败：{e}"))?;
+        file.set_times(
+            std::fs::FileTimes::new()
+                .set_created(file_time)
+                .set_modified(file_time)
+                .set_accessed(file_time),
+        ).map_err(|e| format!("设置文件创建、修改和访问时间失败：{e}"))?;
+        return Ok("已设置创建、修改和访问时间".into());
     }
     #[cfg(target_os = "macos")]
     {
