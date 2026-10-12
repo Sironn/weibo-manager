@@ -577,7 +577,8 @@ function App() {
       const skipped = results.reduce((sum, item) => sum + item.skipped, 0);
       const failed = results.reduce((sum, item) => sum + item.failed, 0);
       const state: TaskState = failed > 0 && downloaded === 0 ? "失败" : "已完成";
-      const detail = `下载 ${downloaded}，跳过 ${skipped}，失败 ${failed}`;
+      const total = downloaded + skipped + failed;
+      const detail = `下载 ${total}，成功 ${downloaded}，跳过 ${skipped}，失败 ${failed}`;
       const finishedTask = { ...startedTask, state, progress: 100, detail };
       setTasks(current => current.map(item => item.id === task.id ? finishedTask : item));
       await invoke("save_download_task", { task: finishedTask });
