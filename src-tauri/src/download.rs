@@ -133,7 +133,7 @@ pub fn remove_download_tasks(app: AppHandle, task_ids: Vec<u64>) -> Result<Vec<u
     let tx = db.transaction().map_err(|e| format!("开始删除下载任务事务失败：{e}"))?;
     let mut removed = Vec::new();
     for id in task_ids {
-        if tx.execute("DELETE FROM tasks WHERE id=?1 AND kind='下载' AND state<>'执行中'", params![id.to_string()])
+        if tx.execute("DELETE FROM tasks WHERE id=?1 AND kind='下载' AND state NOT IN ('执行中','已暂停')", params![id.to_string()])
             .map_err(|e| format!("删除下载任务失败：{e}"))? > 0 { removed.push(id); }
     }
     tx.commit().map_err(|e| format!("提交下载任务删除失败：{e}"))?;
