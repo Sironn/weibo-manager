@@ -186,3 +186,7 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 
 /* 下载失败提示与面板底部保持间距，避免提示框贴住边缘。 */
 .download-status-error { margin: 14px 20px 18px; width: calc(100% - 40px); }
+
+/* 媒体下载筛选操作与微博删除筛选栏保持一致。 */
+.download-filter-foot { margin-bottom: 16px; padding-bottom: 14px; }
+.download-filter-foot .account-actions { margin-left: auto; }

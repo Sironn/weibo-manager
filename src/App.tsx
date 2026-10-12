@@ -16,7 +16,8 @@ import {
 type Page = "dashboard" | "accounts" | "delete" | "download" | "tasks" | "settings";
 type TaskState = "执行中" | "等待中" | "已完成" | "失败" | "已取消";
 type DeletePostResult = { postId: string; state: string; detail: string };
-type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string; postIds?: string[]; dateFrom?: string; dateTo?: string; keyword?: string; postType?: string; results?: DeletePostResult[] };
+type DownloadTaskConfig = { users: string[]; downloadDir: string; dateFrom: string; dateTo: string; mediaType: string; fileTemplate: string; folderTemplate: string };
+type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string; postIds?: string[]; dateFrom?: string; dateTo?: string; keyword?: string; postType?: string; results?: DeletePostResult[]; downloadConfig?: DownloadTaskConfig };
 type WeiboPost = { id: string; date: string; createdAt: string; kind: string; text: string; media: string };
 type PersistedDeleteTask = { id: number; title: string; kind: string; state: TaskState; progress: number; detail: string; createdAt: string; postIds: string[]; dateFrom: string; dateTo: string; keyword: string; postType: string; results?: DeletePostResult[] };
 type RequestIntervalConfig = { mode: "fixed" | "random"; fixedMs: number; minMs: number; maxMs: number };
@@ -101,6 +102,9 @@ function App() {
   const [downloadDateFrom, setDownloadDateFrom] = useState("");
   const [downloadDateTo, setDownloadDateTo] = useState("");
   const [downloadMediaType, setDownloadMediaType] = useState("all");
+  const [appliedDownloadDateFrom, setAppliedDownloadDateFrom] = useState("");
+  const [appliedDownloadDateTo, setAppliedDownloadDateTo] = useState("");
+  const [appliedDownloadMediaType, setAppliedDownloadMediaType] = useState("all");
   const [downloadBusy, setDownloadBusy] = useState(false);
   const [downloadStatus, setDownloadStatus] = useState("");
   const [concurrency, setConcurrency] = useState("3");
@@ -438,47 +442,73 @@ function App() {
       notify(`创建任务失败：${message}`);
     }
   };
-  const startMediaDownload = async () => {
-    if (downloadBusy) return;
-    if (!users.length) { notify("请先添加目标用户 UID 或微博主页链接。"); return; }
+  const createDownloadTask = async () => {
     if (cookieValidity !== "valid") {
       const valid = await refreshCookieValidity();
       if (!valid) { notify("请先登录微博并确认 Cookie 可用。"); return; }
     }
-    const taskId = Date.now();
-    const task: Task = { id: taskId, title: `媒体下载（${users.length} 个用户）`, kind: "下载", state: "执行中", progress: 0, detail: "正在从 m.weibo.cn 采集并下载媒体" };
+    const validUsers = users.map(user => user.trim()).filter(Boolean);
+    if (!validUsers.length) return;
+    const config: DownloadTaskConfig = {
+      users: validUsers,
+      downloadDir: downloadPath,
+      dateFrom: appliedDownloadDateFrom,
+      dateTo: appliedDownloadDateTo,
+      mediaType: appliedDownloadMediaType,
+      fileTemplate: filenameSettings.fileTemplate,
+      folderTemplate: filenameSettings.folderTemplate,
+    };
+    const task: Task = {
+      id: Date.now(), title: `媒体下载（${validUsers.length} 个用户）`, kind: "下载",
+      state: "等待中", progress: 0, detail: "待启动", createdAt: new Date().toLocaleString(), downloadConfig: config,
+      dateFrom: config.dateFrom, dateTo: config.dateTo,
+    };
     setTasks(current => [task, ...current]);
+    setDownloadStatus("下载任务已创建，请前往任务中心启动。");
+    setPage("tasks");
+    notify("下载任务已创建，请在任务中心启动。");
+  };
+  const executeDownloadTask = async (task: Task) => {
+    if (task.kind !== "下载" || !task.downloadConfig || downloadBusy) return;
+    if (cookieValidity !== "valid") {
+      const valid = await refreshCookieValidity();
+      if (!valid) { notify("Cookie 不可用，无法启动下载任务。"); return; }
+    }
     setDownloadBusy(true);
+    setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "执行中", progress: 1, detail: "正在读取微博数据并下载媒体" } : item));
     setDownloadStatus("正在读取微博数据并下载媒体，请保持应用运行。");
-    log("info", "download", `开始媒体下载，目标用户数：${users.length}`);
+    log("info", "download", `任务 ${task.id} 开始执行，目标用户数：${task.downloadConfig.users.length}`);
     try {
-      const results = await invoke<Array<{ user: string; downloaded: number; skipped: number; failed: number; detail: string }>>("download_media", {
-        users,
-        downloadDir: downloadPath,
-        dateFrom: downloadDateFrom,
-        dateTo: downloadDateTo,
-        mediaType: downloadMediaType,
-        fileTemplate: filenameSettings.fileTemplate,
-        folderTemplate: filenameSettings.folderTemplate,
-      });
+      const results = await invoke<Array<{ user: string; downloaded: number; skipped: number; failed: number; detail: string }>>("download_media", task.downloadConfig);
       const downloaded = results.reduce((sum, item) => sum + item.downloaded, 0);
       const skipped = results.reduce((sum, item) => sum + item.skipped, 0);
       const failed = results.reduce((sum, item) => sum + item.failed, 0);
       const state: TaskState = failed > 0 && downloaded === 0 ? "失败" : "已完成";
       const detail = `下载 ${downloaded}，跳过 ${skipped}，失败 ${failed}`;
-      setTasks(current => current.map(item => item.id === taskId ? { ...item, state, progress: 100, detail } : item));
+      setTasks(current => current.map(item => item.id === task.id ? { ...item, state, progress: 100, detail } : item));
       setDownloadStatus(results.map(item => `${item.user}：${item.detail}`).join("；") || detail);
       notify(`下载结束：${detail}`);
       log(state === "失败" ? "error" : "info", "download", detail);
     } catch (reason) {
       const detail = String(reason);
-      setTasks(current => current.map(item => item.id === taskId ? { ...item, state: "失败", progress: 100, detail } : item));
+      setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "失败", progress: 100, detail } : item));
       setDownloadStatus(`下载失败：${detail}`);
       notify(`下载失败：${detail}`);
       log("error", "download", detail);
     } finally {
       setDownloadBusy(false);
     }
+  };
+  const searchDownloadFilters = () => {
+    if (cookieValidity !== "valid") return;
+    if (downloadDateFrom && downloadDateTo && downloadDateFrom > downloadDateTo) {
+      notify("开始日期不能晚于结束日期。");
+      return;
+    }
+    setAppliedDownloadDateFrom(downloadDateFrom);
+    setAppliedDownloadDateTo(downloadDateTo);
+    setAppliedDownloadMediaType(downloadMediaType);
+    setDownloadStatus("筛选条件已应用。创建任务后会按这些条件读取微博。");
   };
   const saveFilenameSettings = (next: FilenameSettings) => {
     setFilenameSettings(next);
@@ -509,13 +539,14 @@ function App() {
       <div className="stats-grid three"><Stat label="待处理用户" value={String(users.length)} icon={Users}/><Stat label="下载任务" value={String(tasks.filter(t => t.kind === "下载").length)} icon={Image} /><Stat label="下载完成" value={String(tasks.filter(t => t.kind === "下载" && t.state === "已完成").length)} icon={Check} /></div>
       <div className="panel download-user-panel">
         <div className="panel-title"><div><strong>目标用户队列</strong><span>支持添加多个用户并排队；日期留空表示不限时间</span></div><span className="tag blue">{users.length} 个用户</span></div>
-        <div className="add-user-row"><div className="input-icon"><Users size={16}/><input placeholder="微博主页链接或用户标识" value={newUser} onChange={e => setNewUser(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newUser.trim()) { setUsers(u => [...u, newUser.trim()]); setNewUser(""); } }} /></div><button className="button secondary" onClick={() => { if (newUser.trim()) { setUsers(u => [...u, newUser.trim()]); setNewUser(""); } }}><Plus size={15}/> 添加用户</button></div>
-        <div className="user-list">{users.map((user, i) => <div className="user-row" key={user + i}><div className="avatar">{user.slice(0, 1).toUpperCase()}</div><div className="user-info"><strong>{user}</strong><span>待采集 · {user.match(/\d+/)?.[0] ? "UID 已识别" : "请确认输入的是 UID 或微博主页链接"}</span></div><span className="tag neutral">队列 {i + 1}</span><button className="icon-button" aria-label="移除用户" onClick={() => setUsers(u => u.filter((_, index) => index !== i))}><X size={16}/></button></div>)}</div>
-        <div className="divider-line"/><div className="form-grid"><Field label="开始日期"><input type="date" value={downloadDateFrom} onChange={e => setDownloadDateFrom(e.target.value)}/></Field><Field label="结束日期"><input type="date" value={downloadDateTo} onChange={e => setDownloadDateTo(e.target.value)}/></Field><Field label="媒体类型"><select value={downloadMediaType} onChange={e => setDownloadMediaType(e.target.value)}><option value="all">图片、视频、LivePhoto</option><option value="images">仅图片</option><option value="videos">仅视频</option><option value="livephoto">仅 LivePhoto</option></select></Field><Field label="下载目录"><div className="input-with-button"><input value={downloadPath} onChange={e => setDownloadPath(e.target.value)}/><button className="icon-button" onClick={() => notify("请在此处填写现有的绝对下载路径；目录选择器暂不在本次范围内。")} aria-label="下载目录说明"><FolderOpen size={16}/></button></div></Field></div>
+        <div className="add-user-row"><div className="input-icon"><Users size={16}/><input placeholder="微博主页链接或用户标识" value={newUser} disabled={cookieValidity !== "valid"} onChange={e => setNewUser(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newUser.trim() && cookieValidity === "valid") { setUsers(u => [...u, newUser.trim()]); setNewUser(""); } }} /></div><button className="button secondary" onClick={() => { if (newUser.trim() && cookieValidity === "valid") { setUsers(u => [...u, newUser.trim()]); setNewUser(""); } }} disabled={!newUser.trim() || cookieValidity !== "valid"}><Plus size={15}/> 添加用户</button></div>
+        <div className="user-list">{users.map((user, i) => <div className="user-row" key={user + i}><div className="avatar">{user.slice(0, 1).toUpperCase()}</div><div className="user-info"><strong>{user}</strong><span>待采集 · {user.match(/\d+/)?.[0] ? "UID 已识别" : "请确认输入的是 UID 或微博主页链接"}</span></div><span className="tag neutral">队列 {i + 1}</span><button className="icon-button" aria-label="移除用户" disabled={cookieValidity !== "valid"} onClick={() => setUsers(u => u.filter((_, index) => index !== i))}><X size={16}/></button></div>)}</div>
+        <div className="divider-line"/><div className="form-grid"><Field label="开始日期"><input type="date" value={downloadDateFrom} disabled={cookieValidity !== "valid"} onChange={e => setDownloadDateFrom(e.target.value)}/></Field><Field label="结束日期"><input type="date" value={downloadDateTo} disabled={cookieValidity !== "valid"} onChange={e => setDownloadDateTo(e.target.value)}/></Field><Field label="媒体类型"><select value={downloadMediaType} disabled={cookieValidity !== "valid"} onChange={e => setDownloadMediaType(e.target.value)}><option value="all">图片、视频、LivePhoto</option><option value="images">仅图片</option><option value="videos">仅视频</option><option value="livephoto">仅 LivePhoto</option></select></Field><Field label="下载目录"><div className="input-with-button"><input value={downloadPath} disabled={cookieValidity !== "valid"} onChange={e => setDownloadPath(e.target.value)}/><button className="icon-button" disabled={cookieValidity !== "valid"} onClick={() => notify("目录选择器将在后续接入系统原生窗口；当前可填写绝对路径。")} aria-label="下载目录说明"><FolderOpen size={16}/></button></div></Field></div>
+        <div className="filter-foot download-filter-foot"><span>筛选条件：{appliedDownloadDateFrom || "不限"} 至 {appliedDownloadDateTo || "不限"} · {appliedDownloadMediaType === "all" ? "全部媒体" : appliedDownloadMediaType === "images" ? "仅图片" : appliedDownloadMediaType === "videos" ? "仅视频" : "仅 LivePhoto"}</span><div className="account-actions"><button className="button primary" onClick={searchDownloadFilters} disabled={cookieValidity !== "valid"}><Search size={15}/> 搜索</button></div></div>
       </div>
-      <div className="panel"><div className="panel-title"><div><strong>开始下载</strong><span>仅从 m.weibo.cn 读取微博，按当前日期和媒体类型下载</span></div><button className="button primary" onClick={() => void startMediaDownload()} disabled={downloadBusy || !users.length}><CloudDownload size={15}/>{downloadBusy ? "正在下载…" : "开始下载"}</button></div>{downloadStatus && <div className={downloadStatus.startsWith("下载失败") ? "auth-error download-status-error" : "inline-note"} role="status">{downloadStatus}</div>}</div>
+      <div className="panel"><div className="panel-title"><div><strong>待处理微博列表</strong><span>日期可留空以读取全部时间；设置条件后点击搜索应用筛选</span></div><button className="button primary" onClick={() => void createDownloadTask()} disabled={cookieValidity !== "valid" || !users.length || downloadBusy}><Plus size={15}/> 创建下载任务</button></div>{downloadStatus && <div className={downloadStatus.startsWith("下载失败") ? "auth-error download-status-error" : "inline-note"} role="status">{downloadStatus}</div>}</div>
     </section>;
-    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" actions={<button className="button secondary" onClick={() => void refreshDeleteTasks(true)}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel task-list-panel"><div className="panel-title task-list-heading"><div><strong>所有任务</strong></div><button className="icon-button task-delete-selected" aria-label="删除选中任务" title={selectedTaskCount ? `删除选中的 ${selectedTaskCount} 条任务` : "请先勾选任务"} disabled={!selectedTaskCount} onClick={() => setShowDeleteTasksConfirm(true)}><Trash2 size={17}/></button></div><div className="table-wrap task-list-scroll"><table><thead><tr><th><input type="checkbox" aria-label="全选可删除任务" checked={selectableTaskIds.length > 0 && selectableTaskIds.every(id => selectedTaskIds.includes(id))} onChange={e => setSelectedTaskIds(e.target.checked ? selectableTaskIds : [])}/></th><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>更多</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><input type="checkbox" aria-label={`选择任务 ${task.id}`} checked={selectedTaskIds.includes(task.id)} disabled={task.state === "执行中"} onChange={e => setSelectedTaskIds(current => e.target.checked ? [...current.filter(id => id !== task.id), task.id] : current.filter(id => id !== task.id))}/></td><td><strong>{task.title}</strong><small>任务 #{task.id}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.kind === "删除" && task.state === "等待中" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}</td><td><div className="account-actions">{task.kind === "删除" && (task.state === "等待中" || task.state === "失败" || task.state === "已取消") && <button className="button danger" disabled={executingDeleteTask !== null || cookieValidity !== "valid"} onClick={() => setDeleteActionTask(task)}>{executingDeleteTask === task.id ? "正在执行…" : task.state === "等待中" ? "执行删除" : "重试任务"}</button>}<button className="icon-button" aria-label="更多任务信息" title="更多" onClick={() => setMoreTask(task)}><MoreHorizontal size={17}/></button></div></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；执行前会再次要求确认。" />}</div></div>      {moreTask && <div className="modal-backdrop" role="presentation"><div className="modal more-task-modal" role="dialog" aria-modal="true" aria-labelledby="more-task-title"><button className="icon-button more-task-close" aria-label="关闭任务详情" title="关闭" onClick={() => setMoreTask(null)}><X size={17}/></button><div className="modal-icon" style={{background:"#eef2ff",color:"#4f67ce"}}><MoreHorizontal/></div><h3 id="more-task-title">{moreTask.title}</h3>
+    if (page === "tasks") return <section className="page-stack"><PageHeading title="任务中心" actions={<button className="button secondary" onClick={() => void refreshDeleteTasks(true)}><RefreshCw size={15}/> 刷新</button>} /><div className="stats-grid four"><Stat label="全部任务" value={String(tasks.length)} icon={ListTodo}/><Stat label="执行中" value={String(tasks.filter(t => t.state === "执行中").length)} icon={Activity}/><Stat label="已完成" value={String(tasks.filter(t => t.state === "已完成").length)} icon={Check}/><Stat label="失败任务" value={String(tasks.filter(t => t.state === "失败").length)} icon={CircleHelp}/></div><div className="panel task-list-panel"><div className="panel-title task-list-heading"><div><strong>所有任务</strong></div><button className="icon-button task-delete-selected" aria-label="删除选中任务" title={selectedTaskCount ? `删除选中的 ${selectedTaskCount} 条任务` : "请先勾选任务"} disabled={!selectedTaskCount} onClick={() => setShowDeleteTasksConfirm(true)}><Trash2 size={17}/></button></div><div className="table-wrap task-list-scroll"><table><thead><tr><th><input type="checkbox" aria-label="全选可删除任务" checked={selectableTaskIds.length > 0 && selectableTaskIds.every(id => selectedTaskIds.includes(id))} onChange={e => setSelectedTaskIds(e.target.checked ? selectableTaskIds : [])}/></th><th>任务</th><th>类型</th><th>状态</th><th>进度</th><th>详情</th><th>更多</th></tr></thead><tbody>{tasks.map(task => <tr key={task.id}><td><input type="checkbox" aria-label={`选择任务 ${task.id}`} checked={selectedTaskIds.includes(task.id)} disabled={task.state === "执行中"} onChange={e => setSelectedTaskIds(current => e.target.checked ? [...current.filter(id => id !== task.id), task.id] : current.filter(id => id !== task.id))}/></td><td><strong>{task.title}</strong><small>任务 #{task.id}</small></td><td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td><td><TaskBadge state={task.state}/></td><td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td><td>{task.kind === "删除" && task.state === "等待中" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}</td><td><div className="account-actions">{task.kind === "删除" && (task.state === "等待中" || task.state === "失败" || task.state === "已取消") && <button className="button danger" disabled={executingDeleteTask !== null || cookieValidity !== "valid"} onClick={() => setDeleteActionTask(task)}>{executingDeleteTask === task.id ? "正在执行…" : task.state === "等待中" ? "执行删除" : "重试任务"}</button>}{task.kind === "下载" && task.downloadConfig && (task.state === "等待中" || task.state === "失败" || task.state === "已取消") && <button className="button primary" disabled={downloadBusy || cookieValidity !== "valid"} onClick={() => void executeDownloadTask(task)}>{downloadBusy ? "正在下载…" : task.state === "等待中" ? "开始下载" : "重试下载"}</button>}<button className="icon-button" aria-label="更多任务信息" title="更多" onClick={() => setMoreTask(task)}><MoreHorizontal size={17}/></button></div></td></tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；执行前会再次要求确认。" />}</div></div>      {moreTask && <div className="modal-backdrop" role="presentation"><div className="modal more-task-modal" role="dialog" aria-modal="true" aria-labelledby="more-task-title"><button className="icon-button more-task-close" aria-label="关闭任务详情" title="关闭" onClick={() => setMoreTask(null)}><X size={17}/></button><div className="modal-icon" style={{background:"#eef2ff",color:"#4f67ce"}}><MoreHorizontal/></div><h3 id="more-task-title">{moreTask.title}</h3>
         <div style={{display:"grid",gap:10,fontSize:12}}>
           {moreTask.postIds && <div><strong>任务总条数：</strong>{moreTask.postIds.length} 条</div>}
           {moreTask.results && moreTask.results.length > 0 && <div><strong>执行结果：</strong>已处理 {moreTask.results.length} 条，成功 {moreTask.results.filter(item => item.state === "已删除").length} 条，失败 {moreTask.results.filter(item => item.state === "失败").length} 条</div>}
