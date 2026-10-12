@@ -184,6 +184,8 @@ pub fn remove_download_tasks(app: AppHandle, task_ids: Vec<u64>, control: State<
             .map_err(|e| format!("删除下载任务失败：{e}"))? > 0 { removed.push(id); }
     }
     tx.commit().map_err(|e| format!("提交下载任务删除失败：{e}"))?;
+    let mut controls = control.tasks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    for id in &removed { controls.remove(id); }
     Ok(removed)
 }
 
