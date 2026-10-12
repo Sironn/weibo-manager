@@ -630,7 +630,7 @@ pub fn remove_delete_tasks(
             params![task_id.to_string()],
             |row| row.get::<_, String>(0),
         ).optional().map_err(|e| format!("读取任务状态失败：{e}"))?;
-        let Some(state) = state else { continue; };
+        if state.is_none() { continue; }
         let changed = tx.execute(
             "DELETE FROM tasks WHERE id=?1 AND kind='删除'",
             params![task_id.to_string()],
