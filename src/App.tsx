@@ -20,6 +20,7 @@ type DownloadTaskConfig = { users: string[]; downloadDir: string; dateFrom: stri
 type Task = { id: number; title: string; kind: "下载" | "删除"; state: TaskState; progress: number; detail: string; createdAt?: string; postIds?: string[]; dateFrom?: string; dateTo?: string; keyword?: string; postType?: string; results?: DeletePostResult[]; downloadConfig?: DownloadTaskConfig };
 type WeiboPost = { id: string; date: string; createdAt: string; kind: string; text: string; media: string };
 type PersistedDeleteTask = { id: number; title: string; kind: string; state: TaskState; progress: number; detail: string; createdAt: string; postIds: string[]; dateFrom: string; dateTo: string; keyword: string; postType: string; results?: DeletePostResult[] };
+type PersistedDownloadTask = { id: number; title: string; state: TaskState; progress: number; detail: string; createdAt: string; downloadConfig: DownloadTaskConfig };
 type RequestIntervalConfig = { mode: "fixed" | "random"; fixedMs: number; minMs: number; maxMs: number };
 const nav: { id: Page; label: string; icon: typeof Home; group: string }[] = [
   { id: "dashboard", label: "工作台", icon: Home, group: "概览" },
@@ -194,9 +195,15 @@ function App() {
 
   const refreshDeleteTasks = async (showSuccess = false) => {
     try {
-      const saved = await invoke<PersistedDeleteTask[]>("get_delete_tasks");
-      setTasks(saved.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results })));
-      setSelectedTaskIds(current => current.filter(id => saved.some(task => task.id === id && task.state !== "执行中")));
+      const [savedDeletes, savedDownloads] = await Promise.all([
+        invoke<PersistedDeleteTask[]>("get_delete_tasks"),
+        invoke<PersistedDownloadTask[]>("get_download_tasks"),
+      ]);
+      const deleteTasks: Task[] = savedDeletes.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }));
+      const downloadTasks: Task[] = savedDownloads.map(task => ({ ...task, kind: "下载", downloadConfig: task.downloadConfig }));
+      const all = [...downloadTasks, ...deleteTasks].sort((a,b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+      setTasks(all);
+      setSelectedTaskIds(current => current.filter(id => all.some(task => task.id === id && task.state !== "执行中")));
       if (showSuccess) notify("刷新成功");
     } catch (reason) { notify(`读取任务失败：${String(reason)}`); }
   };
@@ -486,15 +493,17 @@ function App() {
       fileTemplate: filenameSettings.fileTemplate,
       folderTemplate: filenameSettings.folderTemplate,
     };
-    const task: Task = {
-      id: Date.now(), title: `媒体下载（${validUsers.length} 个用户）`, kind: "下载",
-      state: "等待中", progress: 0, detail: "待启动", createdAt: new Date().toLocaleString(), downloadConfig: config,
-      dateFrom: config.dateFrom, dateTo: config.dateTo,
-    };
-    setTasks(current => [task, ...current]);
-    setDownloadStatus("下载任务已创建，请前往任务中心启动。");
-    setPage("tasks");
-    notify("下载任务已创建，请在任务中心启动。");
+    try {
+      const saved = await invoke<PersistedDownloadTask>("create_download_task", {
+        users: config.users, downloadDir: config.downloadDir, dateFrom: config.dateFrom, dateTo: config.dateTo,
+        mediaType: config.mediaType, fileTemplate: config.fileTemplate, folderTemplate: config.folderTemplate,
+      });
+      const task: Task = { ...saved, kind: "下载", downloadConfig: saved.downloadConfig };
+      setTasks(current => [task, ...current.filter(item => item.id !== task.id)]);
+      setDownloadStatus("下载任务已创建，请前往任务中心启动。");
+      setPage("tasks");
+      notify("下载任务已保存，请在任务中心启动。");
+    } catch (reason) { notify(`创建下载任务失败：${String(reason)}`); }
   };
   const executeDownloadTask = async (task: Task) => {
     if (task.kind !== "下载" || !task.downloadConfig || downloadBusy) return;
