@@ -73,6 +73,8 @@ pub struct DownloadTaskRecord {
     pub detail: String,
     pub created_at: String,
     pub download_config: DownloadTaskConfig,
+    #[serde(default)]
+    pub download_results: Vec<DownloadSummary>,
 }
 fn task_db(app: &AppHandle) -> Result<Connection, String> {
     let dir = app.path().app_data_dir().map_err(|e| format!("无法定位应用数据目录：{e}"))?;
@@ -129,7 +131,7 @@ pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: St
     let task = DownloadTaskRecord {
         id: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 + 1_000_000_000_000,
         title: format!("媒体下载（{} 个用户）", users.len()), state: "等待中".into(), progress: 0,
-        detail: "待启动".into(), created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), download_config: config,
+        detail: "待启动".into(), created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), download_config: config, download_results: Vec::new(),
     };
     let json = serde_json::to_string(&task).map_err(|e| format!("序列化下载任务失败：{e}"))?;
     tx.execute("INSERT INTO tasks (id, kind, state, created_at, detail) VALUES (?1, '下载', ?2, ?3, ?4)",
@@ -210,7 +212,7 @@ pub async fn resolve_download_user(store: State<'_, SessionStore>, user_input: S
     Ok(ResolvedDownloadUser { uid, screen_name })
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadSummary {
     pub user: String,
