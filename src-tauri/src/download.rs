@@ -4,7 +4,7 @@ use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, path::{Path, PathBuf}, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::{Duration, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 #[cfg(target_os = "windows")]
@@ -12,44 +12,48 @@ use std::os::windows::fs::FileTimesExt;
 
 #[derive(Default)]
 pub struct DownloadControl {
-    pub(crate) paused: std::sync::atomic::AtomicBool,
-    pub(crate) cancelled: std::sync::atomic::AtomicBool,
-    running: std::sync::atomic::AtomicBool,
-    active_task_id: std::sync::atomic::AtomicU64,
+    tasks: Mutex<HashMap<u64, Arc<DownloadTaskControl>>>,
 }
-struct DownloadExecutionGuard<'a>(&'a DownloadControl);
-impl Drop for DownloadExecutionGuard<'_> {
-    fn drop(&mut self) {
-        self.0.active_task_id.store(0, std::sync::atomic::Ordering::Release);
-        self.0.running.store(false, std::sync::atomic::Ordering::Release);
-    }
+struct DownloadTaskControl {
+    paused: std::sync::atomic::AtomicBool,
+    cancelled: std::sync::atomic::AtomicBool,
+    running: std::sync::atomic::AtomicBool,
+}
+impl Default for DownloadTaskControl {
+    fn default() -> Self { Self { paused: false.into(), cancelled: false.into(), running: false.into() } }
+}
+fn task_control(control: &DownloadControl, task_id: u64) -> Arc<DownloadTaskControl> {
+    let mut tasks = control.tasks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    tasks.entry(task_id).or_insert_with(|| Arc::new(DownloadTaskControl::default())).clone()
+}
+struct DownloadExecutionGuard(Arc<DownloadTaskControl>);
+impl Drop for DownloadExecutionGuard {
+    fn drop(&mut self) { self.0.running.store(false, std::sync::atomic::Ordering::Release); }
 }
 #[tauri::command]
 pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) {
-    control.active_task_id.store(task_id, std::sync::atomic::Ordering::Release);
-    control.cancelled.store(false, std::sync::atomic::Ordering::Release);
-    control.paused.store(false, std::sync::atomic::Ordering::Release);
+    let task = task_control(&control, task_id);
+    task.cancelled.store(false, std::sync::atomic::Ordering::Release);
+    task.paused.store(false, std::sync::atomic::Ordering::Release);
 }
-async fn wait_download_resume(control: &DownloadControl) -> Result<(), String> {
+async fn wait_download_resume(control: &DownloadTaskControl) -> Result<(), String> {
     while control.paused.load(std::sync::atomic::Ordering::Acquire) {
-        if control.cancelled.load(std::sync::atomic::Ordering::Acquire) {
-            return Err("下载任务已取消。".into());
-        }
+        if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
         tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(150))).await.ok();
     }
     if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
     Ok(())
 }
 #[tauri::command]
-pub fn set_download_paused(paused: bool, control: State<'_, DownloadControl>) {
-    control.paused.store(paused, std::sync::atomic::Ordering::Release);
+pub fn set_download_paused(task_id: u64, paused: bool, control: State<'_, DownloadControl>) {
+    task_control(&control, task_id).paused.store(paused, std::sync::atomic::Ordering::Release);
 }
 #[tauri::command]
-pub fn cancel_download(control: State<'_, DownloadControl>) {
-    control.cancelled.store(true, std::sync::atomic::Ordering::Release);
-    control.paused.store(false, std::sync::atomic::Ordering::Release);
+pub fn cancel_download(task_id: u64, control: State<'_, DownloadControl>) {
+    let task = task_control(&control, task_id);
+    task.cancelled.store(true, std::sync::atomic::Ordering::Release);
+    task.paused.store(false, std::sync::atomic::Ordering::Release);
 }
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DownloadTaskConfig {
