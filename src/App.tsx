@@ -123,6 +123,7 @@ function App() {
   const [appliedDownloadMediaType, setAppliedDownloadMediaType] = useState("all");
   const [downloadBusy, setDownloadBusy] = useState(false);
   const activeDownloadIds = useRef<Set<number>>(new Set());
+  const pausedDownloadIds = useRef<Set<number>>(new Set());
   const tasksRef = useRef<Task[]>([]);
   tasksRef.current = tasks;
   const scheduleWaitingDownloadRef = useRef<() => void>(() => {});
@@ -649,7 +650,7 @@ function App() {
     while (activeDownloadIds.current.size < limit) {
       const next = tasksRef.current.find(item => item.kind === "下载" && item.state === "等待中" && item.downloadConfig && !activeDownloadIds.current.has(item.id));
       if (!next) break;
-      void executeDownloadTask(next);
+      if (pausedDownloadIds.current.has(next.id)) void resumeDownloadTask(next); else void executeDownloadTask(next);
     }
   };
   const startSelectedTasks = () => {
@@ -680,8 +681,12 @@ function App() {
     try {
       await invoke("set_download_paused", { taskId: task.id, paused: true });
       const pausedTask = { ...task, state: "已暂停" as TaskState, detail: "已暂停，点击开始后继续下载" };
+      pausedDownloadIds.current.add(task.id);
+      activeDownloadIds.current.delete(task.id);
+      setDownloadBusy(activeDownloadIds.current.size > 0);
       setTasks(current => current.map(item => item.id === task.id ? pausedTask : item));
       await invoke("save_download_task", { task: pausedTask });
+      scheduleWaitingDownloadRef.current();
     } catch (reason) { notify(`暂停下载失败：${String(reason)}`); }
   };
   const resumeDownloadTask = async (task: Task) => {
@@ -693,6 +698,7 @@ function App() {
     }
     try {
       await invoke("set_download_paused", { taskId: task.id, paused: false });
+      pausedDownloadIds.current.delete(task.id);
       activeDownloadIds.current.add(task.id);
       setDownloadBusy(true);
       const resumedTask = { ...task, state: "执行中" as TaskState, detail: "正在下载媒体" };
