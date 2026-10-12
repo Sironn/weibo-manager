@@ -168,7 +168,7 @@ pub async fn download_media(
 
         loop {
             if page > 100 { break; }
-            let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}&page={page}");
+            let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}");
             let mut request = client.get(&endpoint)
                 .header(COOKIE, &cookie)
                 .header(REFERER, "https://m.weibo.cn/")
@@ -190,9 +190,14 @@ pub async fn download_media(
                 let api_message = body.get("msg").and_then(Value::as_str)
                     .or_else(|| body.pointer("/data/msg").and_then(Value::as_str))
                     .unwrap_or("接口未提供错误说明");
+                // 参考 WeiboAlbumDownloader：移动端时间线通过 since_id 游标翻页。
+                // 到达末尾时接口可能返回“这里还没有内容”，这是正常结束而不是下载失败。
+                if page > 1 && (api_message.contains("这里还没有内容") || api_message.contains("暂无数据")) {
+                    break;
+                }
                 let api_code = body.get("errno").or_else(|| body.get("error_code"))
                     .map(Value::to_string).unwrap_or_else(|| "未知".into());
-                return Err(format!("读取用户 {uid} 第 {page} 页失败：微博接口拒绝请求（错误码 {api_code}，说明：{api_message}）。请确认 UID 正确且 Cookie 仍有效。"));
+                return Err(format!("读取用户 {uid} 第 {page} 次请求失败：微博接口拒绝请求（错误码 {api_code}，说明：{api_message}）。请确认 UID 正确且 Cookie 仍有效。"));
             }
             let next_since_id = body.pointer("/data/cardlistInfo/since_id").and_then(Value::as_str)
                 .map(str::to_string)
