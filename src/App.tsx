@@ -321,10 +321,10 @@ function App() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    void listen<{ user: string; completed: number; total: number; detail: string }>("download-progress", event => {
+    void listen<{ taskId: number; user: string; completed: number; total: number; mediaId: string; phase: string; detail: string }>("download-progress", event => {
       const progress = event.payload;
-      setTasks(current => current.map(task => task.kind === "下载" && task.state === "执行中"
-        ? { ...task, progress: progress.total > 0 ? Math.min(99, Math.round(progress.completed / progress.total * 100)) : task.progress, detail: `${progress.user}：${progress.detail}` }
+      setTasks(current => current.map(task => task.kind === "下载" && task.id === progress.taskId && task.state === "执行中"
+        ? { ...task, progress: progress.total > 0 ? Math.min(99, Math.round(progress.completed / progress.total * 100)) : task.progress, detail: progress.phase === "downloading" ? progress.detail : `${progress.user}：${progress.detail}` }
         : task));
       setDownloadStatus(`${progress.user}：${progress.detail}`);
     }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(reason => {
@@ -518,7 +518,7 @@ function App() {
     setDownloadStatus("正在读取微博数据并下载媒体，请保持应用运行。");
     log("info", "download", `任务 ${task.id} 开始执行，目标用户数：${task.downloadConfig.users.length}`);
     try {
-      const results = await invoke<Array<{ user: string; downloaded: number; skipped: number; failed: number; detail: string }>>("download_media", task.downloadConfig);
+      const results = await invoke<Array<{ user: string; downloaded: number; skipped: number; failed: number; detail: string }>>("download_media", { ...task.downloadConfig, taskId: task.id });
       const downloaded = results.reduce((sum, item) => sum + item.downloaded, 0);
       const skipped = results.reduce((sum, item) => sum + item.skipped, 0);
       const failed = results.reduce((sum, item) => sum + item.failed, 0);
