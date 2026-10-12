@@ -520,7 +520,7 @@ function App() {
   const addDownloadUser = async () => {
     const input = newUser.trim();
     if (!input) return;
-    const normalizeUser = (value: string) => extractWeiboUid(value) || value.trim().toLowerCase().replace(/\\/$/, "");
+    const normalizeUser = (value: string) => extractWeiboUid(value) || value.trim().toLowerCase().replace(/\/$/, "");
     if (users.some(user => normalizeUser(user) === normalizeUser(input))) {
       notify("该用户已在目标用户队列中，无需重复添加。");
       setNewUser("");
