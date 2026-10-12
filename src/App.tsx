@@ -665,7 +665,7 @@ function App() {
     } else if (downloads.length) notify("已提交所选下载任务。");
     else notify("所选任务中没有可以开始的任务。");
   };
-  const pauseDeleteTask  const pauseDeleteTask = async (task: Task) => {
+  const pauseDeleteTask = async (task: Task) => {
     try {
       await invoke("set_delete_task_paused", { paused: true });
       setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "已暂停", detail: "已暂停，点击开始后继续执行" } : item));
