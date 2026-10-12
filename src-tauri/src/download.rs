@@ -22,6 +22,14 @@ struct DownloadTaskControl {
 impl Default for DownloadTaskControl {
     fn default() -> Self { Self { paused: std::sync::atomic::AtomicBool::new(false), cancelled: std::sync::atomic::AtomicBool::new(false), running: std::sync::atomic::AtomicBool::new(false) } }
 }
+/// Cookie 被删除或替换时，取消所有下载任务并解除暂停，避免任务一直卡住。
+pub fn cancel_all_downloads(control: &DownloadControl) {
+    let tasks = control.tasks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    for task in tasks.values() {
+        task.cancelled.store(true, std::sync::atomic::Ordering::Release);
+        task.paused.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
 fn task_control(control: &DownloadControl, task_id: u64) -> Arc<DownloadTaskControl> {
     let mut tasks = control.tasks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     tasks.entry(task_id).or_insert_with(|| Arc::new(DownloadTaskControl::default())).clone()
