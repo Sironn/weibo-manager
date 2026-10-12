@@ -300,6 +300,20 @@ function App() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
+    void listen<{ user: string; completed: number; total: number; detail: string }>("download-progress", event => {
+      const progress = event.payload;
+      setTasks(current => current.map(task => task.kind === "下载" && task.state === "执行中"
+        ? { ...task, progress: progress.total > 0 ? Math.min(99, Math.round(progress.completed / progress.total * 100)) : task.progress, detail: `${progress.user}：${progress.detail}` }
+        : task));
+      setDownloadStatus(`${progress.user}：${progress.detail}`);
+    }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(reason => {
+      log("error", "download", `注册下载进度监听失败：${String(reason)}`);
+    });
+    return () => { disposed = true; unlisten?.(); };
+  }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
     void listen<PersistedDeleteTask>("delete-task-updated", event => {
       const task = event.payload;
       setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }, ...current.filter(item => item.id !== task.id)]);
@@ -410,8 +424,10 @@ function App() {
   const removeSelectedTasks = async () => {
     const ids = selectedTaskIds.filter(id => selectableTaskIds.includes(id));
     if (!ids.length) { setShowDeleteTasksConfirm(false); return; }
+    const deleteIds = ids.filter(id => tasks.some(task => task.id === id && task.kind === "删除"));
     try {
-      const removedIds = await invoke<number[]>("remove_delete_tasks", { taskIds: ids });
+      const removedDeleteIds = deleteIds.length ? await invoke<number[]>("remove_delete_tasks", { taskIds: deleteIds }) : [];
+      const removedIds = [...ids.filter(id => tasks.some(task => task.id === id && task.kind === "下载")), ...removedDeleteIds];
       setTasks(current => current.filter(task => !removedIds.includes(task.id)));
       setSelectedTaskIds([]);
       setShowDeleteTasksConfirm(false);
