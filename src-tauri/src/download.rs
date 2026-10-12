@@ -126,9 +126,12 @@ pub struct DownloadSummary {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DownloadProgress {
+    task_id: u64,
     user: String,
     completed: usize,
     total: usize,
+    media_id: String,
+    phase: String,
     detail: String,
 }
 
@@ -247,6 +250,7 @@ fn extract_media(post: &Value, requested_type: &str) -> Vec<(String, String, Str
 pub async fn download_media(
     app: AppHandle,
     store: State<'_, SessionStore>,
+    task_id: u64,
     users: Vec<String>,
     download_dir: String,
     date_from: String,
@@ -355,6 +359,12 @@ pub async fn download_media(
                         skipped += 1;
                         continue;
                     }
+                    let media_id = url::Url::parse(&url).ok().and_then(|parsed| parsed.path_segments().and_then(|segments| segments.filter(|part| !part.is_empty()).last().map(str::to_string))).unwrap_or_default();
+                    let _ = app.emit("download-progress", DownloadProgress {
+                        task_id, user: display_name.clone(), completed: downloaded + skipped + failed, total: 0,
+                        media_id: media_id.clone(), phase: "downloading".into(),
+                        detail: if media_id.is_empty() { "正在下载媒体".into() } else { format!("正在下载 媒体文件 {media_id}") },
+                    });
                     let result = client.get(&url).header(REFERER, "https://m.weibo.cn/")
                         .header(USER_AGENT, "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1")
                         .send().await;
@@ -383,7 +393,8 @@ pub async fn download_media(
                         }
                     }
                     let _ = app.emit("download-progress", DownloadProgress {
-                        user: display_name.clone(), completed: downloaded + skipped + failed, total: 0,
+                        task_id, user: display_name.clone(), completed: downloaded + skipped + failed, total: 0,
+                        media_id, phase: "completed".into(),
                         detail: format!("已下载 {downloaded}，跳过 {skipped}，失败 {failed}"),
                     });
                 }
