@@ -162,20 +162,25 @@ function App() {
       if (!savedCookie?.trim()) {
         setCookieValidity("invalid");
         setPostsError("尚未登录微博，请先扫码登录或导入 Cookie。");
+        setDownloadError("尚未登录微博，请先扫码登录或导入 Cookie。");
         return false;
       }
       const status = await invoke<string>("check_weibo_cookie");
       if (status === "valid") {
         setCookieValidity("valid");
         setPostsError(current => current.includes("尚未登录微博") || current.includes("Cookie 已失效") || current.includes("Cookie 检测失败") ? "" : current);
+        setDownloadError("");
         return true;
       }
       setCookieValidity("invalid");
       setPostsError("Cookie 已失效，请先重新登录微博或导入有效 Cookie。");
+      setDownloadError("Cookie 已失效，请先重新登录微博或导入有效 Cookie。");
       return false;
     } catch (reason) {
       setCookieValidity("invalid");
-      setPostsError(String(reason).includes("尚未登录微博") ? "尚未登录微博，请先扫码登录或导入 Cookie。" : `Cookie 检测失败：${String(reason)}`);
+      const message = String(reason).includes("尚未登录微博") ? "尚未登录微博，请先扫码登录或导入 Cookie。" : `Cookie 检测失败：${String(reason)}`;
+      setPostsError(message);
+      setDownloadError(message);
       return false;
     }
   };
