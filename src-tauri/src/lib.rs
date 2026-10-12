@@ -58,6 +58,7 @@ pub fn run() {
             auth::check_weibo_cookie,
             auth::delete_weibo_cookie,
             download::download_media,
+            download::prepare_download_task,
             download::create_download_task,
             download::resolve_download_user,
             download::select_download_directory,
