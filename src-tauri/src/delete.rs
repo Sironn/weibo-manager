@@ -577,12 +577,33 @@ pub fn remove_delete_tasks(
     control: State<'_, DeleteSearchControl>,
 ) -> Result<Vec<u64>, String> {
     if task_ids.is_empty() { return Err("请先选择要删除的任务。".into()); }
-    // 与真实删除执行共用互斥标记，避免删除记录和启动任务同时发生。
+    let mut db = db_connection(&app)?;
+    // 如果所选任务正在执行，先请求取消并解除暂停，等后端停止后再删除记录。
+    let mut active_selected = false;
+    for task_id in &task_ids {
+        let state = db.query_row(
+            "SELECT state FROM tasks WHERE id=?1 AND kind='删除'",
+            params![task_id.to_string()],
+            |row| row.get::<_, String>(0),
+        ).optional().map_err(|e| format!("读取任务状态失败：{e}"))?;
+        if matches!(state.as_deref(), Some("执行中" | "已暂停")) {
+            active_selected = true;
+            break;
+        }
+    }
+    if active_selected {
+        control.task_cancelled.store(true, Ordering::Release);
+        control.task_paused.store(false, Ordering::Release);
+        while control.task_running.load(Ordering::Acquire) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        control.task_cancelled.store(false, Ordering::Release);
+    }
+    // 取消结束后重新取得互斥标记，避免删除记录与另一个任务启动并发。
     if control.task_running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
-        return Err("有删除任务正在执行，请等待任务结束后再删除记录。".into());
+        return Err("有删除任务正在执行，请稍后重试删除。".into());
     }
     let _execution_guard = TaskExecutionGuard(&control.task_running);
-    let mut db = db_connection(&app)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| format!("无法锁定任务数据库：{e}"))?;
     let mut unique_ids = std::collections::HashSet::new();
@@ -595,9 +616,6 @@ pub fn remove_delete_tasks(
             |row| row.get::<_, String>(0),
         ).optional().map_err(|e| format!("读取任务状态失败：{e}"))?;
         let Some(state) = state else { continue; };
-        if state == "执行中" {
-            return Err(format!("任务 #{} 正在执行，不能删除。", task_id));
-        }
         let changed = tx.execute(
             "DELETE FROM tasks WHERE id=?1 AND kind='删除'",
             params![task_id.to_string()],
