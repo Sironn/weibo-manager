@@ -143,6 +143,17 @@ function App() {
   const resetAfterCookieDeleted = () => {
     setCookieValidity("invalid");
     setDownloadError("尚未登录微博，请先扫码登录或导入 Cookie。");
+    // Cookie 删除后清除依赖当前登录会话的下载页面数据，保留下载目录与命名等用户设置。
+    setUsers([]);
+    setUserLabels({});
+    setNewUser("");
+    setDownloadDateFrom("");
+    setDownloadDateTo("");
+    setDownloadMediaType("all");
+    setAppliedDownloadDateFrom("");
+    setAppliedDownloadDateTo("");
+    setAppliedDownloadMediaType("all");
+    setDownloadStatus("");
     deleteSearchGeneration.current += 1;
     activeDeleteSearchGeneration.current = null;
     acceptDeletePostEvents.current = false;
