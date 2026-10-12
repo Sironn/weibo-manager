@@ -630,10 +630,31 @@ function App() {
         log("error", "download", detail);
       }
     } finally {
-      setDownloadBusy(false);
+      activeDownloadIds.current.delete(task.id);
+      setDownloadBusy(activeDownloadIds.current.size > 0);
+      scheduleWaitingDownloadRef.current();
     }
   };
-  const pauseDeleteTask = async (task: Task) => {
+  scheduleWaitingDownloadRef.current = () => {
+    const limit = Math.max(1, Number(concurrency) || 1);
+    while (activeDownloadIds.current.size < limit) {
+      const next = tasksRef.current.find(item => item.kind === "下载" && item.state === "等待中" && item.downloadConfig && !activeDownloadIds.current.has(item.id));
+      if (!next) break;
+      void executeDownloadTask(next);
+    }
+  };
+  const startSelectedTasks = () => {
+    const selected = tasksRef.current.filter(task => selectedTaskIds.includes(task.id));
+    const downloads = selected.filter(task => task.kind === "下载" && task.downloadConfig && task.state !== "执行中" && task.state !== "已完成");
+    downloads.forEach(task => void executeDownloadTask(task));
+    const deletions = selected.filter(task => task.kind === "删除" && (task.state === "等待中" || task.state === "失败" || task.state === "已取消"));
+    if (deletions.length) {
+      setDeleteActionTask(deletions[0]);
+      notify("已提交所选下载任务；删除任务仍需逐个确认。");
+    } else if (downloads.length) notify("已提交所选下载任务。");
+    else notify("所选任务中没有可以开始的任务。");
+  };
+  const pauseDeleteTask  const pauseDeleteTask = async (task: Task) => {
     try {
       await invoke("set_delete_task_paused", { paused: true });
       setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "已暂停", detail: "已暂停，点击开始后继续执行" } : item));
