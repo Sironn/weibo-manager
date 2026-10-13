@@ -593,6 +593,7 @@ function App() {
     const valid = await refreshDownloadCookieValidity();
     if (!valid) {
       activeDownloadIds.current.delete(task.id);
+      runningDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
       scheduleWaitingDownloadRef.current();
       notify("Cookie 不可用，无法启动下载任务。");
@@ -602,6 +603,7 @@ function App() {
       await invoke("prepare_download_task", { taskId: task.id });
     } catch (reason) {
       activeDownloadIds.current.delete(task.id);
+      runningDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
       scheduleWaitingDownloadRef.current();
       notify(`准备下载任务失败：${String(reason)}`);
