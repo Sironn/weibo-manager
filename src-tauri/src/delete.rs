@@ -5,7 +5,8 @@ use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{collections::HashMap, sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}}};
+use crate::TaskScheduler;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -114,23 +115,22 @@ fn parse_post(mblog: &Value) -> Option<WeiboPost> {
 pub struct DeleteSearchControl {
     paused: AtomicBool,
     cancelled: AtomicBool,
-    task_paused: AtomicBool,
-    task_cancelled: AtomicBool,
-    task_running: AtomicBool,
-    active_task_id: std::sync::atomic::AtomicU64,
+    task_controls: Mutex<HashMap<u64, Arc<DeleteTaskControl>>>,
+    active_task_id: AtomicU64,
     cookie_removal: AtomicBool,
 }
-
-struct TaskExecutionGuard<'a> {
-    running: &'a AtomicBool,
-    active_task_id: Option<&'a std::sync::atomic::AtomicU64>,
+#[derive(Default)]
+struct DeleteTaskControl { paused: AtomicBool, cancelled: AtomicBool, running: AtomicBool, in_flight: AtomicBool }
+fn delete_task_control(control: &DeleteSearchControl, task_id: u64) -> Arc<DeleteTaskControl> {
+    let mut controls = control.task_controls.lock().unwrap_or_else(|e| e.into_inner());
+    controls.entry(task_id).or_insert_with(|| Arc::new(DeleteTaskControl::default())).clone()
 }
+struct TaskExecutionGuard<'a> { task: &'a DeleteTaskControl, control: &'a DeleteSearchControl, task_id: u64 }
 impl Drop for TaskExecutionGuard<'_> {
     fn drop(&mut self) {
-        if let Some(task_id) = self.active_task_id {
-            task_id.store(0, Ordering::Release);
-        }
-        self.running.store(false, Ordering::Release);
+        let _ = self.control.active_task_id.compare_exchange(self.task_id, 0, Ordering::AcqRel, Ordering::Acquire);
+        self.task.running.store(false, Ordering::Release);
+        self.task.in_flight.store(false, Ordering::Release);
     }
 }
 
@@ -138,15 +138,21 @@ pub(crate) async fn begin_cookie_removal(control: &DeleteSearchControl) {
     control.cookie_removal.store(true, Ordering::Release);
     control.cancelled.store(true, Ordering::Release);
     control.paused.store(false, Ordering::Release);
-    control.task_cancelled.store(true, Ordering::Release);
-    control.task_paused.store(false, Ordering::Release);
-    while control.task_running.load(Ordering::Acquire) {
+    for task in control.task_controls.lock().unwrap_or_else(|e| e.into_inner()).values() {
+        task.cancelled.store(true, Ordering::Release);
+        task.paused.store(false, Ordering::Release);
+    }
+    loop {
+        let active = control.task_controls.lock().unwrap_or_else(|e| e.into_inner()).values().any(|task| task.in_flight.load(Ordering::Acquire));
+        if !active { break; }
         task_sleep(100).await;
     }
 }
-
 pub(crate) fn finish_cookie_removal(control: &DeleteSearchControl) {
-    control.task_cancelled.store(false, Ordering::Release);
+    control.cancelled.store(false, Ordering::Release);
+    for task in control.task_controls.lock().unwrap_or_else(|e| e.into_inner()).values() {
+        task.cancelled.store(false, Ordering::Release);
+    }
     control.cookie_removal.store(false, Ordering::Release);
 }
 #[tauri::command]
@@ -362,7 +368,27 @@ fn load_delete_task(app:&AppHandle,id:u64)->Result<DeleteTask,String>{
  serde_json::from_str(&json).map_err(|e|format!("解析删除任务失败：{e}"))
 }
 async fn task_sleep(ms:u64){tauri::async_runtime::spawn_blocking(move||std::thread::sleep(std::time::Duration::from_millis(ms))).await.ok();}
-async fn wait_delete_resume(c:&DeleteSearchControl)->bool{while c.task_paused.load(Ordering::Relaxed)&&!c.task_cancelled.load(Ordering::Relaxed){task_sleep(150).await;}!c.task_cancelled.load(Ordering::Relaxed)}
+async fn wait_delete_resume(control: &DeleteSearchControl, task_id: u64, task: &DeleteTaskControl, scheduler: &TaskScheduler, permit: &mut Option<tokio::sync::OwnedSemaphorePermit>) -> bool {
+    while task.paused.load(Ordering::Acquire) && !task.cancelled.load(Ordering::Acquire) {
+        if permit.take().is_some() {
+            let _ = control.active_task_id.compare_exchange(task_id, 0, Ordering::AcqRel, Ordering::Acquire);
+            task.running.store(false, Ordering::Release);
+        }
+        task_sleep(150).await;
+    }
+    if task.cancelled.load(Ordering::Acquire) { return false; }
+    if permit.is_none() {
+        match scheduler.acquire().await {
+            Ok(acquired) => {
+                *permit = Some(acquired);
+                task.running.store(true, Ordering::Release);
+                control.active_task_id.store(task_id, Ordering::Release);
+            }
+            Err(_) => return false,
+        }
+    }
+    true
+}
 fn numeric_id_to_bid(id:&str)->Option<String>{
  const A:&[u8]=b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";if id.is_empty()||!id.bytes().all(|b|b.is_ascii_digit()){return None;}
  let mut left=id;let mut out=Vec::new();while !left.is_empty(){let start=left.len().saturating_sub(7);let mut n=left[start..].parse::<u64>().ok()?;let mut chars=Vec::new();while n>0{chars.push(A[(n%62)as usize]as char);n/=62;}if chars.is_empty(){chars.push('0');}chars.reverse();let mut p:String=chars.into_iter().collect();if start>0{p=format!("{:0>4}",p);}out.insert(0,p);left=&left[..start];}Some(out.concat())
@@ -517,9 +543,15 @@ async fn delete_one(client: &reqwest::Client, url: &str, uid: &str, cookie: &str
 }
 
 #[tauri::command]
-pub fn set_delete_task_paused(paused:bool,control:State<'_,DeleteSearchControl>){control.task_paused.store(paused,Ordering::Relaxed);}
+pub fn set_delete_task_paused(task_id: u64, paused: bool, control: State<'_, DeleteSearchControl>) {
+    delete_task_control(&control, task_id).paused.store(paused, Ordering::Release);
+}
 #[tauri::command]
-pub fn set_delete_task_cancelled(cancelled:bool,control:State<'_,DeleteSearchControl>){control.task_cancelled.store(cancelled,Ordering::Relaxed);if cancelled{control.task_paused.store(false,Ordering::Relaxed);}}
+pub fn set_delete_task_cancelled(task_id: u64, cancelled: bool, control: State<'_, DeleteSearchControl>) {
+    let task = delete_task_control(&control, task_id);
+    task.cancelled.store(cancelled, Ordering::Release);
+    if cancelled { task.paused.store(false, Ordering::Release); }
+}
 #[tauri::command]
 pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,SessionStore>,control:State<'_,DeleteSearchControl>)->Result<DeleteTask,String>{
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
