@@ -553,15 +553,17 @@ pub fn set_delete_task_cancelled(task_id: u64, cancelled: bool, control: State<'
     if cancelled { task.paused.store(false, Ordering::Release); }
 }
 #[tauri::command]
-pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,SessionStore>,control:State<'_,DeleteSearchControl>)->Result<DeleteTask,String>{
+pub async fn execute_delete_task(task_id: u64, app: AppHandle, store: State<'_, SessionStore>, control: State<'_, DeleteSearchControl>, scheduler: State<'_, TaskScheduler>) -> Result<DeleteTask, String> {
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
- if control.task_running.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err() {
-     return Err("已有删除任务正在执行，请等待当前任务结束。".into());
- }
- control.task_cancelled.store(false,Ordering::Release);
- control.task_paused.store(false,Ordering::Release);
+ let mut scheduler_permit = Some(scheduler.acquire().await?);
+ if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
+ let task_control = delete_task_control(&control, task_id);
+ task_control.cancelled.store(false, Ordering::Release);
+ task_control.paused.store(false, Ordering::Release);
+ task_control.running.store(true, Ordering::Release);
+ task_control.in_flight.store(true, Ordering::Release);
  control.active_task_id.store(task_id, Ordering::Release);
- let _execution_guard = TaskExecutionGuard { running: &control.task_running, active_task_id: Some(&control.active_task_id) };
+ let _execution_guard = TaskExecutionGuard { task: &task_control, control: &control, task_id };
  let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return Err("任务中没有可删除的微博 ID。".into());}if task.state=="执行中"{return Err("该删除任务已经在执行。".into());}if task.state=="已完成"{return Err("该任务已完成，不能重复执行。".into());}
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
  let cookie=store.cookie()?;
@@ -602,55 +604,38 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  let mut id_to_bid=std::collections::HashMap::new();let mut wanted=std::collections::HashSet::new();for id in &targets{let bid=numeric_id_to_bid(id).ok_or_else(||format!("微博 ID 格式无效：{id}"))?;wanted.insert(bid.clone());id_to_bid.insert(id.clone(),bid);}
  task.state="执行中".into();task.progress=((successful.len()*100)/task.post_ids.len()).min(100)as u8;task.detail=format!("正在查找本人微博删除链接，待处理 {} 条",targets.len());
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());let mut urls=std::collections::HashMap::new();
- for page in 1..=500{if !wait_delete_resume(&control).await{break;}let response=client.get(format!("https://weibo.cn/{uid}/profile?page={page}")).header(COOKIE,&cookie).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(REFERER,"https://weibo.cn/").send().await.map_err(|e|format!("读取本人微博删除链接失败：{e}"))?;
+ for page in 1..=500{if !wait_delete_resume(&control, task_id, &task_control, &scheduler, &mut scheduler_permit).await{break;}let response=client.get(format!("https://weibo.cn/{uid}/profile?page={page}")).header(COOKIE,&cookie).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(REFERER,"https://weibo.cn/").send().await.map_err(|e|format!("读取本人微博删除链接失败：{e}"))?;
  if response.status().as_u16()==401||response.status().as_u16()==403{task.state="失败".into();task.detail=format!("读取本人微博主页被拒绝（HTTP {}），尚未执行删除",response.status().as_u16());save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());return Ok(task);}
  if !response.status().is_success(){return Err(format!("读取本人微博主页失败，HTTP {}",response.status().as_u16()));}let html=response.text().await.map_err(|e|format!("读取本人微博主页内容失败：{e}"))?;urls.extend(links_for_ids(&html,&wanted));if urls.len()>=wanted.len()||!html.contains("删除"){break;}task_sleep(crate::settings::request_delay_ms(&app)).await;}
- for id in targets{if !wait_delete_resume(&control).await{break;}let outcome=match id_to_bid.get(&id).and_then(|bid|urls.get(bid)){Some(url)=>delete_one(&client,url,&uid,&cookie).await,None=>Err("未在本人微博主页中找到该微博的删除链接，未发送删除请求".into())};
+ for id in targets{if !wait_delete_resume(&control, task_id, &task_control, &scheduler, &mut scheduler_permit).await{break;}let outcome=match id_to_bid.get(&id).and_then(|bid|urls.get(bid)){Some(url)=>delete_one(&client,url,&uid,&cookie).await,None=>Err("未在本人微博主页中找到该微博的删除链接，未发送删除请求".into())};
  let (state,detail)=match outcome{Ok(())=>("已删除".to_string(),"已收到可确认的删除成功页面".to_string()),Err(e)=>("失败".to_string(),e)};let fatal=detail.contains("HTTP 401")||detail.contains("HTTP 403")||detail.contains("风控");
  task.results.retain(|r|r.post_id!=id);task.results.push(DeletePostResult{post_id:id,state,detail});task.progress=((task.results.len()*100)/task.post_ids.len()).min(100)as u8;let ok=task.results.iter().filter(|r|r.state=="已删除").count();let failed=task.results.iter().filter(|r|r.state=="失败").count();task.detail=format!("已处理 {}/{} 条；成功 {} 条，失败 {} 条",task.results.len(),task.post_ids.len(),ok,failed);
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());if fatal{break;}task_sleep(crate::settings::request_delay_ms(&app)).await;}
- if control.task_cancelled.load(Ordering::Relaxed){task.state="已取消".into();task.detail=format!("任务已取消，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if task.results.iter().any(|r|r.state=="失败")||task.results.len()<task.post_ids.len(){task.state="失败".into();}else{task.state="已完成".into();}
+ if task_control.cancelled.load(Ordering::Relaxed){task.state="已取消".into();task.detail=format!("任务已取消，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if task.results.iter().any(|r|r.state=="失败")||task.results.len()<task.post_ids.len(){task.state="失败".into();}else{task.state="已完成".into();}
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());Ok(task)
 }
 
 #[tauri::command]
-pub fn remove_delete_tasks(
+pub async fn remove_delete_tasks(
     task_ids: Vec<u64>,
     app: AppHandle,
     control: State<'_, DeleteSearchControl>,
+    scheduler: State<'_, TaskScheduler>,
 ) -> Result<Vec<u64>, String> {
     if task_ids.is_empty() { return Err("请先选择要删除的任务。".into()); }
-    let mut db = db_connection(&app)?;
-    // 如果所选任务正在执行，先请求取消并解除暂停，等后端停止后再删除记录。
-    let active_task_id = control.active_task_id.load(Ordering::Acquire);
-    let mut active_selected = active_task_id != 0 && task_ids.contains(&active_task_id);
-    // 只有当前没有活动任务 ID 时，才把数据库里的执行中状态当作上次异常退出留下的旧状态。
-    if active_task_id == 0 {
-        for task_id in &task_ids {
-            let state = db.query_row(
-                "SELECT state FROM tasks WHERE id=?1 AND kind='删除'",
-                params![task_id.to_string()],
-                |row| row.get::<_, String>(0),
-            ).optional().map_err(|e| format!("读取任务状态失败：{e}"))?;
-            if matches!(state.as_deref(), Some("执行中" | "已暂停")) {
-                active_selected = true;
-                break;
+    // 删除执行中的任务前先请求取消，并等待该任务后台完全退出。
+    for task_id in &task_ids {
+        let task = control.task_controls.lock().unwrap_or_else(|e| e.into_inner()).get(task_id).cloned();
+        if let Some(task) = task {
+            if task.in_flight.load(Ordering::Acquire) {
+                task.cancelled.store(true, Ordering::Release);
+                task.paused.store(false, Ordering::Release);
+                while task.in_flight.load(Ordering::Acquire) { task_sleep(50).await; }
             }
         }
     }
-    if active_selected {
-        control.task_cancelled.store(true, Ordering::Release);
-        control.task_paused.store(false, Ordering::Release);
-        while control.task_running.load(Ordering::Acquire) {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        control.task_cancelled.store(false, Ordering::Release);
-    }
-    // 取消结束后重新取得互斥标记，避免删除记录与另一个任务启动并发。
-    if control.task_running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
-        return Err("有删除任务正在执行，请稍后重试删除。".into());
-    }
-    let _execution_guard = TaskExecutionGuard { running: &control.task_running, active_task_id: None };
+    let _scheduler_permit = scheduler.acquire().await?;
+    let mut db = db_connection(&app)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| format!("无法锁定任务数据库：{e}"))?;
     let mut unique_ids = std::collections::HashSet::new();
