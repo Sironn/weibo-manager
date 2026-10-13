@@ -675,7 +675,7 @@ function App() {
   const startSelectedTasks = () => {
     const selected = tasksRef.current.filter(task => selectedTaskIds.includes(task.id));
     const downloads = selected.filter(task => task.kind === "下载" && task.downloadConfig && task.state !== "执行中" && task.state !== "已完成");
-    downloads.forEach(task => void executeDownloadTask(task));
+    downloads.forEach(task => { if (task.state === "已暂停" || pausedDownloadIds.current.has(task.id)) void resumeDownloadTask(task); else void executeDownloadTask(task); });
     const deletions = selected.filter(task => task.kind === "删除" && (task.state === "未开始" || task.state === "失败"));
     if (deletions.length) {
       setPendingDeleteStartIds(deletions.slice(1).map(task => task.id));

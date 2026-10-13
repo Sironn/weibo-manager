@@ -42,10 +42,14 @@ impl Drop for DownloadExecutionGuard {
     fn drop(&mut self) { self.task.running.store(false, std::sync::atomic::Ordering::Release); }
 }
 #[tauri::command]
-pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) {
+pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) -> Result<(), String> {
     let task = task_control(&control, task_id);
+    if task.running.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("任务正在执行，不能重置控制状态。".into());
+    }
     task.cancelled.store(false, std::sync::atomic::Ordering::Release);
     task.paused.store(false, std::sync::atomic::Ordering::Release);
+    Ok(())
 }
 async fn wait_download_resume(control: &DownloadTaskControl) -> Result<(), String> {
     if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }

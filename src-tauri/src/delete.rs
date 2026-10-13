@@ -526,8 +526,6 @@ pub fn set_delete_task_cancelled(cancelled:bool,control:State<'_,DeleteSearchCon
 #[tauri::command]
 pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,SessionStore>,control:State<'_,DeleteSearchControl>,execution_gate:State<'_,crate::task_execution::TaskExecutionGate>)->Result<DeleteTask,String>{
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
- let _execution_permit = execution_gate.acquire().await?;
- if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
  if control.task_running.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err() {
      return Err("已有删除任务正在执行，请等待当前任务结束。".into());
  }
@@ -535,6 +533,9 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  control.task_paused.store(false,Ordering::Release);
  control.active_task_id.store(task_id, Ordering::Release);
  let _execution_guard = TaskExecutionGuard { running: &control.task_running, active_task_id: Some(&control.active_task_id) };
+ let _execution_permit = execution_gate.acquire().await?;
+ if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
+ if control.task_cancelled.load(Ordering::Acquire) { return Err("删除任务已停止。".into()); }
  let result = execute_delete_task_inner(task_id, app.clone(), &store, &control).await;
  if let Err(error) = &result {
    if let Ok(mut task) = load_delete_task(&app, task_id) {
