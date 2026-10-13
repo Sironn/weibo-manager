@@ -44,18 +44,41 @@ pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) 
     task.cancelled.store(false, std::sync::atomic::Ordering::Release);
     task.paused.store(false, std::sync::atomic::Ordering::Release);
 }
-async fn wait_download_resume(app: &AppHandle, task_id: u64, control: &DownloadTaskControl, scheduler: &TaskScheduler, permit: &mut Option<tokio::sync::OwnedSemaphorePermit>) -> Result<(), String> {
-    while control.paused.load(std::sync::atomic::Ordering::Acquire) {
-        permit.take();
+async fn acquire_download_slot(control: &DownloadTaskControl, scheduler: &TaskScheduler) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+    loop {
         if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
-        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(150))).await.ok();
+        if control.paused.load(std::sync::atomic::Ordering::Acquire) {
+            tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(100))).await.ok();
+            continue;
+        }
+        tokio::select! {
+            permit = scheduler.acquire() => {
+                let acquired = permit?;
+                if control.paused.load(std::sync::atomic::Ordering::Acquire) {
+                    drop(acquired);
+                } else {
+                    return Ok(acquired);
+                }
+            },
+            _ = tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(100))) => {}
+        }
     }
-    if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
-    if permit.is_none() {
-        *permit = Some(scheduler.acquire().await?);
-        let _ = app.emit("task-scheduler-started", task_id);
+}
+async fn wait_download_resume(app: &AppHandle, task_id: u64, control: &DownloadTaskControl, scheduler: &TaskScheduler, permit: &mut Option<tokio::sync::OwnedSemaphorePermit>) -> Result<(), String> {
+    loop {
+        while control.paused.load(std::sync::atomic::Ordering::Acquire) {
+            permit.take();
+            if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
+            tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(150))).await.ok();
+        }
+        if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
+        if permit.is_none() {
+            *permit = Some(acquire_download_slot(control, scheduler).await?);
+            let _ = app.emit("task-scheduler-started", task_id);
+            continue;
+        }
+        if !control.paused.load(std::sync::atomic::Ordering::Acquire) { return Ok(()); }
     }
-    Ok(())
 }
 #[tauri::command]
 pub fn set_download_paused(task_id: u64, paused: bool, control: State<'_, DownloadControl>) {
@@ -416,7 +439,7 @@ pub async fn download_media(
     scheduler: State<'_, TaskScheduler>,
 ) -> Result<Vec<DownloadSummary>, String> {
     let task_control = task_control(&control, task_id);
-    let mut scheduler_permit = Some(scheduler.acquire().await?);
+    let mut scheduler_permit = Some(acquire_download_slot(&task_control, &scheduler).await?);
     if task_control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
     task_control.running.store(true, std::sync::atomic::Ordering::Release);
     let _execution_guard = DownloadExecutionGuard(task_control.clone());
