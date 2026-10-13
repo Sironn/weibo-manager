@@ -527,6 +527,7 @@ pub fn set_delete_task_cancelled(cancelled:bool,control:State<'_,DeleteSearchCon
 pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,SessionStore>,control:State<'_,DeleteSearchControl>,execution_gate:State<'_,crate::task_execution::TaskExecutionGate>)->Result<DeleteTask,String>{
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
  let _execution_permit = execution_gate.acquire().await?;
+ if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
  if control.task_running.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err() {
      return Err("已有删除任务正在执行，请等待当前任务结束。".into());
  }

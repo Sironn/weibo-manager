@@ -441,6 +441,7 @@ pub async fn download_media(
     let mut _execution_guard = DownloadExecutionGuard { task: task_control.clone(), _permit: None };
     let permit = execution_gate.acquire().await?;
     _execution_guard._permit = Some(permit);
+    if task_control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
     if task_control.paused.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已暂停。".into()); }
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let cookie = store.cookie()?;
