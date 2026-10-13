@@ -541,7 +541,7 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
    if let Ok(mut task) = load_delete_task(&app, task_id) {
      if task.state != "已完成" && task.state != "已暂停" && !error.contains("该删除任务已经在执行") {
        task.state = "失败".into();
-       task.detail = error.clone();
+       task.detail = error.to_string();
        if save_delete_task(&app, &task).is_ok() { let _ = app.emit("delete-task-updated", task); }
      }
    }
