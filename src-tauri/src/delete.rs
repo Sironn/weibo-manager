@@ -371,20 +371,46 @@ fn load_delete_task(app:&AppHandle,id:u64)->Result<DeleteTask,String>{
  serde_json::from_str(&json).map_err(|e|format!("解析删除任务失败：{e}"))
 }
 async fn task_sleep(ms:u64){tauri::async_runtime::spawn_blocking(move||std::thread::sleep(std::time::Duration::from_millis(ms))).await.ok();}
+async fn acquire_delete_slot(task: &DeleteTaskControl, control: &DeleteSearchControl, scheduler: &TaskScheduler) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+    loop {
+        if task.cancelled.load(Ordering::Acquire) || control.cookie_removal.load(Ordering::Acquire) {
+            return Err("删除任务已取消或 Cookie 正在删除。".into());
+        }
+        let notified = task.notify.notified();
+        if task.paused.load(Ordering::Acquire) {
+            notified.await;
+            continue;
+        }
+        tokio::select! {
+            permit = scheduler.acquire() => {
+                let acquired = permit?;
+                if task.paused.load(Ordering::Acquire)
+                    || task.cancelled.load(Ordering::Acquire)
+                    || control.cookie_removal.load(Ordering::Acquire)
+                {
+                    drop(acquired);
+                } else {
+                    return Ok(acquired);
+                }
+            },
+            _ = notified => {}
+        }
+    }
+}
 async fn wait_delete_resume(app: &AppHandle, control: &DeleteSearchControl, task_id: u64, task: &DeleteTaskControl, scheduler: &TaskScheduler, permit: &mut Option<tokio::sync::OwnedSemaphorePermit>) -> bool {
-    while task.paused.load(Ordering::Acquire) && !task.cancelled.load(Ordering::Acquire) {
+    while task.paused.load(Ordering::Acquire) && !task.cancelled.load(Ordering::Acquire) && !control.cookie_removal.load(Ordering::Acquire) {
         if permit.take().is_some() {
             let _ = control.active_task_id.compare_exchange(task_id, 0, Ordering::AcqRel, Ordering::Acquire);
             task.running.store(false, Ordering::Release);
         }
         let notified = task.notify.notified();
-        if task.paused.load(Ordering::Acquire) && !task.cancelled.load(Ordering::Acquire) {
+        if task.paused.load(Ordering::Acquire) && !task.cancelled.load(Ordering::Acquire) && !control.cookie_removal.load(Ordering::Acquire) {
             notified.await;
         }
     }
-    if task.cancelled.load(Ordering::Acquire) { return false; }
+    if task.cancelled.load(Ordering::Acquire) || control.cookie_removal.load(Ordering::Acquire) { return false; }
     if permit.is_none() {
-        match scheduler.acquire().await {
+        match acquire_delete_slot(task, control, scheduler).await {
             Ok(acquired) => {
                 *permit = Some(acquired);
                 task.running.store(true, Ordering::Release);
