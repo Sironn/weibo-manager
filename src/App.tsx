@@ -696,8 +696,9 @@ function App() {
     pausedDeleteIds.current.add(task.id);
     setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "暂停中", detail: "正在停止后台删除工作" } : item));
     try {
-      await invoke("set_delete_task_paused", { taskId: task.id, paused: true });
-      setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "已暂停", detail: "已暂停，点击开始后继续执行" } : item));
+      const finalState = await invoke<TaskState>("set_delete_task_paused", { taskId: task.id, paused: true });
+      if (finalState === "已暂停") setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "已暂停", detail: "已暂停，点击开始后继续执行" } : item));
+      else setTasks(current => current.map(item => item.id === task.id ? { ...item, state: finalState } : item));
     } catch (reason) { notify(`暂停删除失败：${String(reason)}`); }
   };
   const resumeDeleteTask = async (task: Task) => {
