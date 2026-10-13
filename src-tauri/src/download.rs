@@ -218,6 +218,7 @@ pub fn remove_download_tasks(app: AppHandle, task_ids: Vec<u64>, control: State<
     for (_, task) in &active_controls {
         task.cancelled.store(true, std::sync::atomic::Ordering::Release);
         task.paused.store(false, std::sync::atomic::Ordering::Release);
+        task.notify.notify_one();
     }
     for (_, task) in &active_controls {
         while task.running.load(std::sync::atomic::Ordering::Acquire) { std::thread::sleep(Duration::from_millis(50)); }
