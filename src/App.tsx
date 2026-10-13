@@ -237,7 +237,7 @@ function App() {
         invoke<PersistedDownloadTask[]>("get_download_tasks"),
       ]);
       const deleteTasks: Task[] = savedDeletes.map(task => ({ id: task.id, title: task.title, kind: "删除", state: normalizeTaskState(task.state), progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }));
-      const downloadTasks: Task[] = savedDownloads.map(task => ({ ...task, kind: "下载", downloadConfig: task.downloadConfig, downloadResults: task.downloadResults ?? [] }));
+      const downloadTasks: Task[] = savedDownloads.map(task => ({ ...task, state: normalizeTaskState(task.state), kind: "下载", downloadConfig: task.downloadConfig, downloadResults: task.downloadResults ?? [] }));
       const all = [...downloadTasks, ...deleteTasks].sort((a,b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
       setTasks(all);
       setSelectedTaskIds(current => current.filter(id => all.some(task => task.id === id)));
