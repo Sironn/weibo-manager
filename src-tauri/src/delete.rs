@@ -536,8 +536,15 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  let _execution_guard = TaskExecutionGuard { running: &control.task_running, active_task_id: Some(&control.active_task_id) };
  let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return Err("任务中没有可删除的微博 ID。".into());}if task.state=="执行中"{return Err("该删除任务已经在执行。".into());}if task.state=="已完成"{return Err("该任务已完成，不能重复执行。".into());}
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
- let cookie=store.cookie()?;
- if check_cookie_availability(&cookie).await? != "valid" { return Err("Cookie 已失效，请重新登录微博后再执行删除任务。".into()) }
+ let cookie=match store.cookie() {
+   Ok(cookie)=>cookie,
+   Err(error)=>{ task.state="失败".into(); task.detail=error.clone(); save_delete_task(&app,&task)?; let _=app.emit("delete-task-updated",task.clone()); return Err(error); }
+ };
+ match check_cookie_availability(&cookie).await {
+   Ok(state) if state=="valid" => {},
+   Ok(_) => { let error="Cookie 已失效，请重新登录微博后再执行删除任务。".to_string(); task.state="失败".into(); task.detail=error.clone(); save_delete_task(&app,&task)?; let _=app.emit("delete-task-updated",task.clone()); return Err(error); },
+   Err(error) => { task.state="失败".into(); task.detail=error.clone(); save_delete_task(&app,&task)?; let _=app.emit("delete-task-updated",task.clone()); return Err(error); }
+ }
  let client=reqwest::Client::builder().timeout(std::time::Duration::from_secs(25)).build().map_err(|e|format!("初始化删除请求失败：{e}"))?;
  let config=client.get("https://m.weibo.cn/api/config").header(COOKIE,cookie.as_str()).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(ACCEPT,"application/json, text/plain, */*").send().await.map_err(|e|format!("验证微博会话失败：{e}"))?;
  if !config.status().is_success(){return Err(format!("验证微博会话失败，HTTP {}",config.status().as_u16()));}let json:Value=config.json().await.map_err(|e|format!("解析微博账号信息失败：{e}"))?;

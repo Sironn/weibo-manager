@@ -597,20 +597,11 @@ function App() {
     }
     activeDownloadIds.current.add(task.id);
     setDownloadBusy(true);
-    const valid = await refreshDownloadCookieValidity();
     if (pausedDownloadIds.current.has(task.id)) {
       activeDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
       if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
       scheduleWaitingDownloadRef.current();
-      return;
-    }
-    if (!valid) {
-      activeDownloadIds.current.delete(task.id);
-      setDownloadBusy(activeDownloadIds.current.size > 0);
-      if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
-      scheduleWaitingDownloadRef.current();
-      notify("Cookie 不可用，无法启动下载任务。");
       return;
     }
     try {

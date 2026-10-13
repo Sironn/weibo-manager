@@ -418,8 +418,11 @@ pub async fn download_media(
     if task_control.running.compare_exchange(false, true, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire).is_err() {
         return Err("该下载任务已经在执行，不能重复启动。".into());
     }
+    let _execution_permit = match execution_gate.acquire().await {
+        Ok(permit) => permit,
+        Err(error) => { task_control.running.store(false, std::sync::atomic::Ordering::Release); return Err(error); }
+    };
     let _execution_guard = DownloadExecutionGuard(task_control.clone());
-    let _execution_permit = execution_gate.acquire().await?;
     if task_control.paused.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已暂停。".into()); }
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let cookie = store.cookie()?;
