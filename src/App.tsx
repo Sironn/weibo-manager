@@ -129,7 +129,6 @@ function App() {
   const scheduleWaitingDownloadRef = useRef<() => void>(() => {});
   const [downloadStatus, setDownloadStatus] = useState("");
   const [downloadError, setDownloadError] = useState("");
-  const [concurrency, setConcurrency] = useState("3");
   const [requestIntervalMode, setRequestIntervalMode] = useState<"fixed" | "random">("fixed");
   const [requestDelay, setRequestDelay] = useState("1200");
   const [requestMinDelay, setRequestMinDelay] = useState("1000");
@@ -344,8 +343,6 @@ function App() {
       setPostsError(`取消读取失败：${String(reason)}`);
     }
   };
-  useEffect(() => { try { const saved = localStorage.getItem("wm-task-concurrency"); if (saved && ["1", "2", "3", "5"].includes(saved)) setConcurrency(saved); } catch { /* 使用默认并发数 */ } }, []);
-  useEffect(() => { scheduleWaitingDownloadRef.current(); }, [concurrency]);
   const saveRequestInterval = async (config: RequestIntervalConfig) => {
     try {
       const saved = await invoke<RequestIntervalConfig>("save_request_interval", { config });
@@ -582,7 +579,7 @@ function App() {
   };
   const executeDownloadTask = async (task: Task) => {
     if (task.kind !== "下载" || !task.downloadConfig || activeDownloadIds.current.has(task.id)) return;
-    const limit = Math.max(1, Number(concurrency) || 1);
+    const limit = 1;
     if (activeDownloadIds.current.size >= limit) {
       const waitingTask = { ...task, state: "等待中" as TaskState, detail: "等待下载并发名额" };
       setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
@@ -646,7 +643,7 @@ function App() {
     }
   };
   scheduleWaitingDownloadRef.current = () => {
-    const limit = Math.max(1, Number(concurrency) || 1);
+    const limit = 1;
     while (activeDownloadIds.current.size < limit) {
       const next = tasksRef.current.find(item => item.kind === "下载" && item.state === "等待中" && item.downloadConfig && !activeDownloadIds.current.has(item.id));
       if (!next) break;
@@ -667,13 +664,13 @@ function App() {
   };
   const pauseDeleteTask = async (task: Task) => {
     try {
-      await invoke("set_delete_task_paused", { paused: true });
+      await invoke("set_delete_task_paused", { taskId: task.id, paused: true });
       setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "已暂停", detail: "已暂停，点击开始后继续执行" } : item));
     } catch (reason) { notify(`暂停删除任务失败：${String(reason)}`); }
   };
   const resumeDeleteTask = async (task: Task) => {
     try {
-      await invoke("set_delete_task_paused", { paused: false });
+      await invoke("set_delete_task_paused", { taskId: task.id, paused: false });
       setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "执行中", detail: "正在执行删除任务" } : item));
     } catch (reason) { notify(`恢复删除任务失败：${String(reason)}`); }
   };
@@ -690,7 +687,7 @@ function App() {
     } catch (reason) { notify(`暂停下载失败：${String(reason)}`); }
   };
   const resumeDownloadTask = async (task: Task) => {
-    if (!activeDownloadIds.current.has(task.id) && activeDownloadIds.current.size >= Math.max(1, Number(concurrency) || 1)) {
+    if (!activeDownloadIds.current.has(task.id) && activeDownloadIds.current.size >= 1) {
       const waitingTask = { ...task, state: "等待中" as TaskState, detail: "等待下载并发名额" };
       setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
       try { await invoke("save_download_task", { task: waitingTask }); } catch { /* 保持等待状态 */ }
@@ -780,7 +777,6 @@ function App() {
         <section className="panel settings-section" id="settings-general">
           <div className="panel-title"><div><strong>常规设置</strong><span>个性化应用显示与任务行为</span></div></div>
           <Field label="主题"><select value={theme} onChange={e => { setTheme(e.target.value); setDark(e.target.value === "dark"); }}><option value="system">跟随系统（当前预览为浅色）</option><option value="light">浅色</option><option value="dark">深色</option></select></Field>
-          <div className="setting-row"><div><strong>任务并发数</strong><span>同时处理的任务数量</span></div><select value={concurrency} onChange={e => { setConcurrency(e.target.value); localStorage.setItem("wm-task-concurrency", e.target.value); scheduleWaitingDownloadRef.current(); }}><option value="1">1 个</option><option value="2">2 个</option><option value="3">3 个</option><option value="5">5 个</option></select></div>
           <div className="setting-row request-interval-row"><div><strong>请求间隔</strong><span>统一配置网络请求的等待间隔</span></div><div className="request-interval-controls"><select aria-label="请求间隔模式" value={requestIntervalMode} onChange={e => { const mode = e.target.value as "fixed" | "random"; setRequestIntervalMode(mode); void saveRequestInterval({ mode, fixedMs: Number(requestDelay), minMs: Number(requestMinDelay), maxMs: Number(requestMaxDelay) }); }}><option value="fixed">固定间隔</option><option value="random">随机范围</option></select>{requestIntervalMode === "fixed" ? <select aria-label="固定请求间隔" value={requestDelay} onChange={e => { setRequestDelay(e.target.value); void saveRequestInterval({ mode: "fixed", fixedMs: Number(e.target.value), minMs: Number(requestMinDelay), maxMs: Number(requestMaxDelay) }); }}><option value="800">800 毫秒</option><option value="1200">1200 毫秒</option><option value="2000">2000 毫秒</option><option value="3000">3000 毫秒</option><option value="5000">5000 毫秒</option></select> : <div className="request-range"><label>最短 <input type="number" min="500" max="30000" step="100" value={requestMinDelay} onChange={e => setRequestMinDelay(e.target.value)} onBlur={() => { const min = Math.max(500, Number(requestMinDelay) || 500); const max = Math.max(min, Number(requestMaxDelay) || min); void saveRequestInterval({ mode: "random", fixedMs: Number(requestDelay), minMs: min, maxMs: max }); }} /> ms</label><label>最长 <input type="number" min="500" max="60000" step="100" value={requestMaxDelay} onChange={e => setRequestMaxDelay(e.target.value)} onBlur={() => { const min = Math.max(500, Number(requestMinDelay) || 500); const max = Math.max(min, Number(requestMaxDelay) || min); void saveRequestInterval({ mode: "random", fixedMs: Number(requestDelay), minMs: min, maxMs: max }); }} /> ms</label></div>}</div></div>
           <div className="setting-row"><div><strong>运行日志</strong><span>记录前后端关键操作与错误，关闭后停止写入</span></div><label className="log-toggle"><input type="checkbox" checked={loggingEnabled} onChange={e => { void toggleLogging(e.target.checked); }} /><span>{loggingEnabled ? "已开启" : "已关闭"}</span></label></div>
           <div className="setting-row"><div><strong>日志文件夹</strong><span>查看已保存的运行日志文件</span></div><button className="button secondary" onClick={() => { void openLogFolder(); }}><FolderOpen size={15}/> 打开日志文件夹</button></div>
