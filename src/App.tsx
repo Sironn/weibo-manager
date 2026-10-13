@@ -582,7 +582,7 @@ function App() {
     if (task.kind !== "下载" || !task.downloadConfig || activeDownloadIds.current.has(task.id)) return;
     const limit = 1;
     if (activeDownloadIds.current.size >= limit) {
-      const waitingTask = { ...task, state: "等待中" as TaskState, detail: "等待下载并发名额" };
+      const waitingTask = { ...task, state: "等待中" as TaskState, detail: "等待全局任务名额" };
       setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
       try { await invoke("save_download_task", { task: waitingTask }); } catch (reason) { log("error", "download", `保存等待任务状态失败：${String(reason)}`); }
       return;
