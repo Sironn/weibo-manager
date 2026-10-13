@@ -124,6 +124,8 @@ function App() {
   const [downloadBusy, setDownloadBusy] = useState(false);
   const activeDownloadIds = useRef<Set<number>>(new Set());
   const activeSlotWaiters = useRef<Array<() => void>>([]);
+  const suspendedDownloadIds = useRef<Set<number>>(new Set());
+  const downloadWorkerIds = useRef<Set<number>>(new Set());
   const pausedDeleteIds = useRef<Set<number>>(new Set());
   const pausedDownloadIds = useRef<Set<number>>(new Set());
   const tasksRef = useRef<Task[]>([]);
@@ -599,6 +601,8 @@ function App() {
     setDownloadBusy(true);
     if (pausedDownloadIds.current.has(task.id)) {
       activeDownloadIds.current.delete(task.id);
+      downloadWorkerIds.current.delete(task.id);
+      suspendedDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
       if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
       scheduleWaitingDownloadRef.current();
@@ -627,6 +631,7 @@ function App() {
     setDownloadStatus("正在读取微博数据并下载媒体，请保持应用运行。");
     log("info", "download", `任务 ${task.id} 开始执行，目标用户数：${task.downloadConfig.users.length}`);
     try {
+      downloadWorkerIds.current.add(task.id);
       const results = await invoke<Array<{ user: string; downloaded: number; skipped: number; failed: number; detail: string }>>("download_media", { ...task.downloadConfig, taskId: task.id });
       const downloaded = results.reduce((sum, item) => sum + item.downloaded, 0);
       const skipped = results.reduce((sum, item) => sum + item.skipped, 0);
@@ -708,14 +713,24 @@ function App() {
     finally { setExecutingDeleteTask(null); }
   };
   const pauseDownloadTask = async (task: Task) => {
+    const wasWorkerStarted = downloadWorkerIds.current.has(task.id);
     pausedDownloadIds.current.add(task.id);
     const pausingTask = { ...task, state: "暂停中" as TaskState, detail: "正在停止后台下载工作" };
     setTasks(current => current.map(item => item.id === task.id ? pausingTask : item));
     try {
-      await invoke("set_download_paused", { taskId: task.id, paused: true });
-      const pausedTask = { ...task, state: "已暂停" as TaskState, detail: "已暂停，点击开始后继续下载" };
-      setTasks(current => current.map(item => item.id === task.id ? pausedTask : item));
-      await invoke("save_download_task", { task: pausedTask });
+      const suspended = await invoke<boolean>("set_download_paused", { taskId: task.id, paused: true });
+      if (suspended) suspendedDownloadIds.current.add(task.id);
+      else if (wasWorkerStarted) pausedDownloadIds.current.delete(task.id);
+      activeDownloadIds.current.delete(task.id);
+      setDownloadBusy(activeDownloadIds.current.size > 0);
+      if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
+      const latest = tasksRef.current.find(item => item.id === task.id);
+      if (suspended || (!wasWorkerStarted && latest?.state !== "已完成" && latest?.state !== "失败")) {
+        const pausedTask = { ...task, state: "已暂停" as TaskState, detail: "已暂停，点击开始后继续下载" };
+        setTasks(current => current.map(item => item.id === task.id ? pausedTask : item));
+        await invoke("save_download_task", { task: pausedTask });
+      }
+      scheduleWaitingDownloadRef.current();
     } catch (reason) { notify(`暂停下载失败：${String(reason)}`); }
   };
   const resumeDownloadTask = async (task: Task) => {
@@ -726,6 +741,25 @@ function App() {
       return;
     }
     pausedDownloadIds.current.delete(task.id);
+    if (suspendedDownloadIds.current.has(task.id)) {
+      activeDownloadIds.current.add(task.id);
+      setDownloadBusy(true);
+      const resumedTask = { ...task, state: "执行中" as TaskState, detail: "正在继续下载" };
+      setTasks(current => current.map(item => item.id === task.id ? resumedTask : item));
+      try {
+        const resumed = await invoke<boolean>("set_download_paused", { taskId: task.id, paused: false });
+        if (!resumed) {
+          suspendedDownloadIds.current.delete(task.id);
+          activeDownloadIds.current.delete(task.id);
+          setDownloadBusy(activeDownloadIds.current.size > 0);
+          void executeDownloadTask({ ...task, state: "未开始" });
+          return;
+        }
+        suspendedDownloadIds.current.delete(task.id);
+        await invoke("save_download_task", { task: resumedTask });
+      } catch (reason) { notify(`恢复下载失败：${String(reason)}`); }
+      return;
+    }
     void executeDownloadTask({ ...task, state: "未开始" });
   };
   const saveFilenameSettings = (next: FilenameSettings) => {
