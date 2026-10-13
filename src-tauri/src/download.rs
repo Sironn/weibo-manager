@@ -44,14 +44,17 @@ pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) 
     task.cancelled.store(false, std::sync::atomic::Ordering::Release);
     task.paused.store(false, std::sync::atomic::Ordering::Release);
 }
-async fn wait_download_resume(control: &DownloadTaskControl, scheduler: &TaskScheduler, permit: &mut Option<tokio::sync::OwnedSemaphorePermit>) -> Result<(), String> {
+async fn wait_download_resume(app: &AppHandle, task_id: u64, control: &DownloadTaskControl, scheduler: &TaskScheduler, permit: &mut Option<tokio::sync::OwnedSemaphorePermit>) -> Result<(), String> {
     while control.paused.load(std::sync::atomic::Ordering::Acquire) {
         permit.take();
         if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
         tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(150))).await.ok();
     }
     if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
-    if permit.is_none() { *permit = Some(scheduler.acquire().await?); }
+    if permit.is_none() {
+        *permit = Some(scheduler.acquire().await?);
+        let _ = app.emit("task-scheduler-started", task_id);
+    }
     Ok(())
 }
 #[tauri::command]
@@ -451,7 +454,7 @@ pub async fn download_media(
         let mut total = 0usize;
 
         loop {
-            wait_download_resume(&task_control, &scheduler, &mut scheduler_permit).await?;
+            wait_download_resume(&app, task_id, &task_control, &scheduler, &mut scheduler_permit).await?;
             if !scheduler_started_emitted {
                 let _ = app.emit("task-scheduler-started", task_id);
                 scheduler_started_emitted = true;
@@ -514,7 +517,7 @@ pub async fn download_media(
                 }
                 let mut media = extract_media(&card, media_filter);
                 for (url, kind, ext) in media.drain(..) {
-                    wait_download_resume(&task_control, &scheduler, &mut scheduler_permit).await?;
+                    wait_download_resume(&app, task_id, &task_control, &scheduler, &mut scheduler_permit).await?;
                     total += 1;
                     let filename = replace_template(&file_template, &display_name, &post_time, &post_id, total, &ext);
                     let target = user_folder.join(filename);
