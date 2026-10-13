@@ -663,6 +663,9 @@ function App() {
       }
     } finally {
       activeDownloadIds.current.delete(task.id);
+      downloadWorkerIds.current.delete(task.id);
+      suspendedDownloadIds.current.delete(task.id);
+      pausedDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
       if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
       scheduleWaitingDownloadRef.current();
