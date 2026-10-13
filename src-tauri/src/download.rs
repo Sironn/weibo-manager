@@ -1,4 +1,4 @@
-use crate::{auth::SessionStore, logger::write_log, settings};
+use crate::{auth::SessionStore, logger::write_log, settings, TaskScheduler};
 use chrono::DateTime;
 use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
 use rusqlite::{params, Connection, TransactionBehavior};
@@ -44,12 +44,14 @@ pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) 
     task.cancelled.store(false, std::sync::atomic::Ordering::Release);
     task.paused.store(false, std::sync::atomic::Ordering::Release);
 }
-async fn wait_download_resume(control: &DownloadTaskControl) -> Result<(), String> {
+async fn wait_download_resume(control: &DownloadTaskControl, scheduler: &TaskScheduler, permit: &mut Option<tokio::sync::OwnedSemaphorePermit>) -> Result<(), String> {
     while control.paused.load(std::sync::atomic::Ordering::Acquire) {
+        permit.take();
         if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
         tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(150))).await.ok();
     }
     if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
+    if permit.is_none() { *permit = Some(scheduler.acquire().await?); }
     Ok(())
 }
 #[tauri::command]
@@ -408,8 +410,10 @@ pub async fn download_media(
     folder_template: String,
     modify_file_time: bool,
     control: State<'_, DownloadControl>,
+    scheduler: State<'_, TaskScheduler>,
 ) -> Result<Vec<DownloadSummary>, String> {
     let task_control = task_control(&control, task_id);
+    let mut scheduler_permit = Some(scheduler.acquire().await?);
     if task_control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
     task_control.running.store(true, std::sync::atomic::Ordering::Release);
     let _execution_guard = DownloadExecutionGuard(task_control.clone());
@@ -446,7 +450,7 @@ pub async fn download_media(
         let mut total = 0usize;
 
         loop {
-            wait_download_resume(&task_control).await?;
+            wait_download_resume(&task_control, &scheduler, &mut scheduler_permit).await?;
             if page > 100 { break; }
             let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}");
             let mut request = client.get(&endpoint)
@@ -505,7 +509,7 @@ pub async fn download_media(
                 }
                 let mut media = extract_media(&card, media_filter);
                 for (url, kind, ext) in media.drain(..) {
-                    wait_download_resume(&task_control).await?;
+                    wait_download_resume(&task_control, &scheduler, &mut scheduler_permit).await?;
                     total += 1;
                     let filename = replace_template(&file_template, &display_name, &post_time, &post_id, total, &ext);
                     let target = user_folder.join(filename);
