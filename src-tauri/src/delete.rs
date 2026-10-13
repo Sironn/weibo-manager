@@ -712,6 +712,10 @@ pub async fn remove_delete_tasks(
         if changed > 0 { removed_ids.push(task_id); }
     }
     tx.commit().map_err(|e| format!("提交任务删除失败：{e}"))?;
+    let mut controls = control.task_controls.lock().unwrap_or_else(|e| e.into_inner());
+    for task_id in &removed_ids {
+        controls.remove(task_id);
+    }
     Ok(removed_ids)
 }
 
