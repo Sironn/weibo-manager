@@ -18,9 +18,10 @@ struct DownloadTaskControl {
     paused: std::sync::atomic::AtomicBool,
     cancelled: std::sync::atomic::AtomicBool,
     running: std::sync::atomic::AtomicBool,
+    resume_notify: tokio::sync::Notify,
 }
 impl Default for DownloadTaskControl {
-    fn default() -> Self { Self { paused: std::sync::atomic::AtomicBool::new(false), cancelled: std::sync::atomic::AtomicBool::new(false), running: std::sync::atomic::AtomicBool::new(false) } }
+    fn default() -> Self { Self { paused: std::sync::atomic::AtomicBool::new(false), cancelled: std::sync::atomic::AtomicBool::new(false), running: std::sync::atomic::AtomicBool::new(false), resume_notify: tokio::sync::Notify::new() } }
 }
 /// Cookie 被删除或替换时，取消所有下载任务并解除暂停，避免任务一直卡住。
 pub fn cancel_all_downloads(control: &DownloadControl) {
@@ -43,24 +44,30 @@ pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) 
     let task = task_control(&control, task_id);
     task.cancelled.store(false, std::sync::atomic::Ordering::Release);
     task.paused.store(false, std::sync::atomic::Ordering::Release);
+    task.resume_notify.notify_one();
 }
 async fn wait_download_resume(control: &DownloadTaskControl) -> Result<(), String> {
-    while control.paused.load(std::sync::atomic::Ordering::Acquire) {
+    loop {
         if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
-        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(150))).await.ok();
+        let notified = control.resume_notify.notified();
+        if !control.paused.load(std::sync::atomic::Ordering::Acquire) { break; }
+        notified.await;
     }
     if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
     Ok(())
 }
 #[tauri::command]
 pub fn set_download_paused(task_id: u64, paused: bool, control: State<'_, DownloadControl>) {
-    task_control(&control, task_id).paused.store(paused, std::sync::atomic::Ordering::Release);
+    let task = task_control(&control, task_id);
+    task.paused.store(paused, std::sync::atomic::Ordering::Release);
+    if !paused { task.resume_notify.notify_one(); }
 }
 #[tauri::command]
 pub fn cancel_download(task_id: u64, control: State<'_, DownloadControl>) {
     let task = task_control(&control, task_id);
     task.cancelled.store(true, std::sync::atomic::Ordering::Release);
     task.paused.store(false, std::sync::atomic::Ordering::Release);
+    task.resume_notify.notify_one();
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -411,7 +418,9 @@ pub async fn download_media(
 ) -> Result<Vec<DownloadSummary>, String> {
     let task_control = task_control(&control, task_id);
     if task_control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
-    task_control.running.store(true, std::sync::atomic::Ordering::Release);
+    if task_control.running.compare_exchange(false, true, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire).is_err() {
+        return Err("该下载任务已经在执行，不能重复启动。".into());
+    }
     let _execution_guard = DownloadExecutionGuard(task_control.clone());
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let cookie = store.cookie()?;
