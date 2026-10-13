@@ -534,8 +534,21 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  control.task_paused.store(false,Ordering::Release);
  control.active_task_id.store(task_id, Ordering::Release);
  let _execution_guard = TaskExecutionGuard { running: &control.task_running, active_task_id: Some(&control.active_task_id) };
- let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return Err("任务中没有可删除的微博 ID。".into());}if task.state=="执行中"{return Err("该删除任务已经在执行。".into());}if task.state=="已完成"{return Err("该任务已完成，不能重复执行。".into());}
- if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
+ let result = execute_delete_task_inner(task_id, app.clone(), &store, &control).await;
+ if let Err(error) = &result {
+   if let Ok(mut task) = load_delete_task(&app, task_id) {
+     if task.state != "已完成" && task.state != "已暂停" && task.state != "执行中" {
+       task.state = "失败".into();
+       task.detail = error.clone();
+       if save_delete_task(&app, &task).is_ok() { let _ = app.emit("delete-task-updated", task); }
+     }
+   }
+ }
+ result
+}
+
+async fn execute_delete_task_inner(task_id:u64,app:AppHandle,store:&SessionStore,control:&DeleteSearchControl)->Result<DeleteTask,String>{
+let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return Err("任务中没有可删除的微博 ID。".into());}if task.state=="执行中"{return Err("该删除任务已经在执行。".into());}if task.state=="已完成"{return Err("该任务已完成，不能重复执行。".into());}
  let cookie=match store.cookie() {
    Ok(cookie)=>cookie,
    Err(error)=>{ task.state="失败".into(); task.detail=error.clone(); save_delete_task(&app,&task)?; let _=app.emit("delete-task-updated",task.clone()); return Err(error); }
