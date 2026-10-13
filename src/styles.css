@@ -205,19 +205,71 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .inline-toggle input { flex:0 0 auto; }
 
 
-/* 阶段 4：下载筛选条件与任务中心表格紧凑布局。 */
+/* 媒体下载：目标用户队列表单行（局部 flex，不改通用 .form-grid / .field） */
 .download-form-grid {
-  grid-template-columns: minmax(118px, .72fr) minmax(118px, .72fr) minmax(155px, 1fr) minmax(205px, 1.45fr) minmax(125px, .72fr);
-  align-items: end;
-  gap: 10px;
-  padding-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 14px 20px 0;
+  min-width: 0;
 }
-.download-form-grid .field { min-width: 0; }
-.download-form-grid .field input[type="date"] { padding: 8px 6px; font-size: 10px; }
-.download-form-grid .input-with-button { display: flex; min-width: 0; gap: 6px; }
-.download-form-grid .input-with-button input { min-width: 0; padding: 8px 7px; }
-.download-form-grid .input-with-button .icon-button { flex: 0 0 34px; }
-.download-form-grid .switch-control { align-self: stretch; display: flex; align-items: center; min-height: 34px; }
+.download-form-grid .field-date,
+.download-form-grid .field-media,
+.download-form-grid .field-path {
+  flex: 1 1 0;
+}
+.download-form-grid .field-date,
+.download-form-grid .field-media {
+  min-width: max-content;
+}
+.download-form-grid .field-path {
+  min-width: 15ch;
+}
+.download-form-grid .field > span {
+  white-space: nowrap;
+}
+.download-form-grid .field input[type="date"],
+.download-form-grid .field select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  font-size: 11px;
+}
+.download-form-grid .input-with-button {
+  display: flex;
+  min-width: 0;
+  width: 100%;
+  gap: 6px;
+  margin: 0;
+}
+.download-form-grid .input-with-button input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.download-form-grid .input-with-button .icon-button {
+  flex: 0 0 34px;
+}
+.download-form-grid .field-switch {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 auto;
+  align-items: flex-start;
+}
+.download-form-grid .field-switch > span {
+  font-size: 10px;
+  color: #6f798b;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.download-form-grid .field-switch .switch-control {
+  margin-top: 6px;
+}
 .download-filter-foot { margin: 14px 0 0; padding: 14px 20px 0; }
 .download-user-panel { padding-bottom: 18px; }
 .switch-control { position: relative; display: inline-flex; align-items: center; cursor: pointer; width: 38px; height: 22px; }
@@ -246,49 +298,181 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .task-action-icon.icon-tooltip::after { content: attr(data-tooltip); position: absolute; z-index: 30; left: 50%; bottom: calc(100% + 7px); transform: translate(-50%,3px); padding: 5px 8px; border-radius: 5px; background: #27324a; color: #fff; font-size: 10px; font-weight: 500; line-height: 1.4; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s ease,transform .12s ease,visibility .12s ease; }
 .task-action-icon.icon-tooltip:hover::after, .task-action-icon.icon-tooltip:focus-visible::after { opacity: 1; visibility: visible; transform: translate(-50%,0); }
 
-@media (max-width: 1120px) {
-  .download-form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
 @media (max-width: 760px) {
-  .download-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .download-filter-foot { align-items: flex-start; flex-direction: column; }
   .download-filter-foot > span { white-space: normal; overflow-wrap: anywhere; }
   .download-filter-foot .account-actions { margin-left: 0; }
 }
 
+/* 任务中心「所有任务」表：局部布局（仅 .task-list-scroll 作用域，不影响其它表格） */
+.task-list-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  max-height: min(70vh, 680px);
+}
+.task-list-heading { flex-shrink: 0; }
+.task-list-scroll {
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: auto;
+  min-width: 0;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #c5cbd6 transparent;
+}
+.task-list-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.task-list-scroll::-webkit-scrollbar-thumb { background: #c5cbd6; border-radius: 4px; }
+.task-list-scroll::-webkit-scrollbar-track { background: transparent; }
+.task-list-scroll thead { position: sticky; top: 0; z-index: 3; }
+.task-list-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: #fafbfc;
+  box-shadow: 0 1px 0 #edf0f4;
+}
+.dark .task-list-scroll thead th { background: #202633; box-shadow: 0 1px 0 #303747; }
 
-/* 统一任务列表列宽与筛选栏紧凑布局。 */
-.task-list-scroll { overflow-x: hidden; min-width: 0; }
-.task-list-scroll table { width: 100%; min-width: 0 !important; table-layout: fixed; }
-.task-list-scroll thead th { text-align: left !important; white-space: nowrap; }
-.task-list-scroll th, .task-list-scroll td { padding: 6px 5px !important; white-space: nowrap; }
-.task-list-scroll th:nth-child(1), .task-list-scroll td:nth-child(1) { width: 30px; text-align: center; }
-.task-list-scroll th:nth-child(2), .task-list-scroll td:nth-child(2) { width: 17%; }
-.task-list-scroll th:nth-child(3), .task-list-scroll td:nth-child(3) { width: 54px; }
-.task-list-scroll th:nth-child(4), .task-list-scroll td:nth-child(4) { width: 70px; }
-.task-list-scroll th:nth-child(5), .task-list-scroll td:nth-child(5) { width: 84px; }
-.task-list-scroll th:nth-child(6), .task-list-scroll td:nth-child(6) { width: auto; }
-.task-list-scroll th:nth-child(7), .task-list-scroll td:nth-child(7) { width: 84px; }
-.task-list-scroll th:nth-child(8), .task-list-scroll td:nth-child(8) { width: 42px; }
+.task-list-scroll table {
+  width: 100%;
+  min-width: 780px;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.task-list-scroll th,
+.task-list-scroll td {
+  padding: 8px 10px;
+  vertical-align: middle;
+  box-sizing: border-box;
+  border-bottom: 1px solid #edf0f4;
+}
+.dark .task-list-scroll th,
+.dark .task-list-scroll td { border-bottom-color: #303747; }
+
+/* 1 勾选 */
+.task-list-scroll th:nth-child(1),
+.task-list-scroll td:nth-child(1) {
+  width: 44px;
+  white-space: nowrap;
+  text-align: center !important;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+/* 2 任务：最短约 150px，随界面伸缩，超长省略 */
+.task-list-scroll th:nth-child(2),
+.task-list-scroll td:nth-child(2) {
+  width: 22%;
+  min-width: 150px;
+  text-align: left !important;
+  overflow: hidden;
+  padding-right: 10px;
+}
 .task-title-cell { overflow: hidden; text-overflow: ellipsis; }
-.task-title-cell strong, .task-title-cell small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-operation-actions { justify-content: flex-start !important; flex-wrap: nowrap !important; gap: 1px !important; }
-.task-operation-actions .task-action-icon { width: 25px !important; height: 27px !important; flex: 0 0 25px !important; }
+.task-title-cell strong,
+.task-title-cell small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 3 类型 4 状态：居中 */
+.task-list-scroll th:nth-child(3),
+.task-list-scroll td:nth-child(3) {
+  width: 72px;
+  white-space: nowrap;
+  text-align: center !important;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.task-list-scroll th:nth-child(4),
+.task-list-scroll td:nth-child(4) {
+  width: 88px;
+  white-space: nowrap;
+  text-align: center !important;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+/* 5 进度：居中，与详情留白 */
+.task-list-scroll th:nth-child(5),
+.task-list-scroll td:nth-child(5) {
+  width: 120px;
+  min-width: 120px;
+  white-space: nowrap;
+  text-align: center !important;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.task-list-scroll td:nth-child(5) .table-progress {
+  margin-inline: auto;
+  justify-content: center;
+  min-width: 6.5rem;
+  max-width: 9rem;
+  gap: 6px;
+}
+.task-list-scroll .table-progress small {
+  flex: 0 0 auto;
+  min-width: 2.5em;
+  text-align: right;
+}
+.task-list-scroll .progress-track {
+  flex: 1 1 auto;
+  min-width: 36px;
+  width: auto;
+}
+/* 6 详情：最短约 15ch，随界面伸缩，超长省略 */
+.task-list-scroll th:nth-child(6),
+.task-list-scroll td:nth-child(6) {
+  width: 34%;
+  min-width: 15ch;
+  text-align: left !important;
+  padding-left: 10px;
+  padding-right: 10px;
+  overflow: hidden;
+}
+.task-detail-cell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 7 操作 8 更多：居中对齐按钮 */
+.task-list-scroll th:nth-child(7),
+.task-list-scroll td:nth-child(7) {
+  width: 96px;
+  white-space: nowrap;
+  text-align: center !important;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.task-list-scroll th:nth-child(8),
+.task-list-scroll td:nth-child(8) {
+  width: 56px;
+  white-space: nowrap;
+  text-align: center !important;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.task-list-scroll td:nth-child(7) .task-operation-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: nowrap;
+  gap: 1px;
+  margin: 0;
+  width: 100%;
+}
+.task-operation-actions .task-action-icon {
+  width: 25px;
+  height: 27px;
+  flex: 0 0 25px;
+}
+.task-list-scroll td:nth-child(8) .icon-button {
+  margin-inline: auto;
+}
 .task-bulk-actions { display: flex; align-items: center; gap: 4px; }
 .task-list-heading { justify-content: space-between; }
 .task-start-selected { color: var(--accent, #526bd7); }
-.download-form-grid { grid-template-columns: minmax(0, .75fr) minmax(0, .75fr) minmax(0, .9fr) minmax(0, 1.2fr) minmax(0, .8fr) !important; gap: 6px !important; }
-.download-form-grid .field input[type="date"], .download-form-grid .field select { width: 100%; min-width: 0; padding: 7px 4px !important; font-size: 10px !important; }
-.download-form-grid .input-with-button { min-width: 0; }
-.download-form-grid .input-with-button input { width: 100%; min-width: 0; padding: 7px 4px !important; }
-.switch-control { white-space: nowrap; }
-@media (max-width: 1120px) { .download-form-grid { grid-template-columns: minmax(0, .75fr) minmax(0, .75fr) minmax(0, .9fr) minmax(0, 1.2fr) minmax(0, .8fr) !important; } }
-
-/* 所有任务内容恢复左对齐，复选框保留居中。 */
-.task-list-scroll td { text-align: left !important; }
-.task-list-scroll th:nth-child(1), .task-list-scroll td:nth-child(1) { text-align: center !important; }
-.task-list-scroll th:nth-child(7), .task-list-scroll td:nth-child(7), .task-list-scroll th:nth-child(8), .task-list-scroll td:nth-child(8) { text-align: left !important; }
-
-/* 任务名称和详情使用固定紧凑宽度，避免挤出操作区。 */
-.task-list-scroll th:nth-child(2), .task-list-scroll td:nth-child(2) { width: 145px !important; max-width: 145px; }
-.task-list-scroll th:nth-child(6), .task-list-scroll td:nth-child(6) { width: 165px !important; max-width: 165px; }
