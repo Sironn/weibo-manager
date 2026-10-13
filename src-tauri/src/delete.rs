@@ -119,8 +119,10 @@ pub struct DeleteSearchControl {
     active_task_id: AtomicU64,
     cookie_removal: AtomicBool,
 }
-#[derive(Default)]
-struct DeleteTaskControl { paused: AtomicBool, cancelled: AtomicBool, running: AtomicBool, in_flight: AtomicBool }
+struct DeleteTaskControl { paused: AtomicBool, cancelled: AtomicBool, running: AtomicBool, in_flight: AtomicBool, notify: tokio::sync::Notify }
+impl Default for DeleteTaskControl {
+    fn default() -> Self { Self { paused: AtomicBool::new(false), cancelled: AtomicBool::new(false), running: AtomicBool::new(false), in_flight: AtomicBool::new(false), notify: tokio::sync::Notify::new() } }
+}
 fn delete_task_control(control: &DeleteSearchControl, task_id: u64) -> Arc<DeleteTaskControl> {
     let mut controls = control.task_controls.lock().unwrap_or_else(|e| e.into_inner());
     controls.entry(task_id).or_insert_with(|| Arc::new(DeleteTaskControl::default())).clone()
@@ -141,6 +143,7 @@ pub(crate) async fn begin_cookie_removal(control: &DeleteSearchControl) {
     for task in control.task_controls.lock().unwrap_or_else(|e| e.into_inner()).values() {
         task.cancelled.store(true, Ordering::Release);
         task.paused.store(false, Ordering::Release);
+        task.notify.notify_one();
     }
     loop {
         let active = control.task_controls.lock().unwrap_or_else(|e| e.into_inner()).values().any(|task| task.in_flight.load(Ordering::Acquire));
@@ -374,7 +377,10 @@ async fn wait_delete_resume(app: &AppHandle, control: &DeleteSearchControl, task
             let _ = control.active_task_id.compare_exchange(task_id, 0, Ordering::AcqRel, Ordering::Acquire);
             task.running.store(false, Ordering::Release);
         }
-        task_sleep(150).await;
+        let notified = task.notify.notified();
+        if task.paused.load(Ordering::Acquire) && !task.cancelled.load(Ordering::Acquire) {
+            notified.await;
+        }
     }
     if task.cancelled.load(Ordering::Acquire) { return false; }
     if permit.is_none() {
@@ -545,13 +551,16 @@ async fn delete_one(client: &reqwest::Client, url: &str, uid: &str, cookie: &str
 
 #[tauri::command]
 pub fn set_delete_task_paused(task_id: u64, paused: bool, control: State<'_, DeleteSearchControl>) {
-    delete_task_control(&control, task_id).paused.store(paused, Ordering::Release);
+    let task = delete_task_control(&control, task_id);
+    task.paused.store(paused, Ordering::Release);
+    task.notify.notify_one();
 }
 #[tauri::command]
 pub fn set_delete_task_cancelled(task_id: u64, cancelled: bool, control: State<'_, DeleteSearchControl>) {
     let task = delete_task_control(&control, task_id);
     task.cancelled.store(cancelled, Ordering::Release);
     if cancelled { task.paused.store(false, Ordering::Release); }
+    task.notify.notify_one();
 }
 #[tauri::command]
 pub async fn execute_delete_task(task_id: u64, app: AppHandle, store: State<'_, SessionStore>, control: State<'_, DeleteSearchControl>, scheduler: State<'_, TaskScheduler>) -> Result<DeleteTask, String> {
@@ -565,20 +574,21 @@ pub async fn execute_delete_task(task_id: u64, app: AppHandle, store: State<'_, 
  let mut scheduler_permit = Some(loop {
      if task_control.cancelled.load(Ordering::Acquire) { return Err("删除任务已取消。".into()); }
      if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
+     let notified = task_control.notify.notified();
      if task_control.paused.load(Ordering::Acquire) {
-         task_sleep(50).await;
+         notified.await;
          continue;
      }
      tokio::select! {
          permit = scheduler.acquire() => {
              let acquired = permit?;
-             if task_control.paused.load(Ordering::Acquire) {
+             if task_control.paused.load(Ordering::Acquire) || task_control.cancelled.load(Ordering::Acquire) {
                  drop(acquired);
              } else {
                  break acquired;
              }
          },
-         _ = task_sleep(50) => {}
+         _ = notified => {}
      }
  });
  if task_control.cancelled.load(Ordering::Acquire) { return Err("删除任务已取消。".into()); }
@@ -650,6 +660,7 @@ pub async fn remove_delete_tasks(
             if task.in_flight.load(Ordering::Acquire) {
                 task.cancelled.store(true, Ordering::Release);
                 task.paused.store(false, Ordering::Release);
+                task.notify.notify_one();
                 while task.in_flight.load(Ordering::Acquire) { task_sleep(50).await; }
             }
         }
