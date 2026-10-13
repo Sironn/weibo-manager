@@ -555,15 +555,23 @@ pub fn set_delete_task_cancelled(task_id: u64, cancelled: bool, control: State<'
 #[tauri::command]
 pub async fn execute_delete_task(task_id: u64, app: AppHandle, store: State<'_, SessionStore>, control: State<'_, DeleteSearchControl>, scheduler: State<'_, TaskScheduler>) -> Result<DeleteTask, String> {
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
- let mut scheduler_permit = Some(scheduler.acquire().await?);
- if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
  let task_control = delete_task_control(&control, task_id);
  task_control.cancelled.store(false, Ordering::Release);
  task_control.paused.store(false, Ordering::Release);
- task_control.running.store(true, Ordering::Release);
+ task_control.running.store(false, Ordering::Release);
  task_control.in_flight.store(true, Ordering::Release);
- control.active_task_id.store(task_id, Ordering::Release);
  let _execution_guard = TaskExecutionGuard { task: &task_control, control: &control, task_id };
+ let mut scheduler_permit = Some(loop {
+     if task_control.cancelled.load(Ordering::Acquire) { return Err("删除任务已取消。".into()); }
+     if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
+     tokio::select! {
+         permit = scheduler.acquire() => break permit?,
+         _ = task_sleep(50) => {}
+     }
+ });
+ if task_control.cancelled.load(Ordering::Acquire) { return Err("删除任务已取消。".into()); }
+ task_control.running.store(true, Ordering::Release);
+ control.active_task_id.store(task_id, Ordering::Release);
  let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return Err("任务中没有可删除的微博 ID。".into());}if task.state=="执行中"{return Err("该删除任务已经在执行。".into());}if task.state=="已完成"{return Err("该任务已完成，不能重复执行。".into());}
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
  let cookie=store.cookie()?;
