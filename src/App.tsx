@@ -16,7 +16,6 @@ import {
 
 type Page = "dashboard" | "accounts" | "delete" | "download" | "tasks" | "settings";
 type TaskState = "执行中" | "等待中" | "已暂停" | "已完成" | "失败";
-const normalizeTaskState = (state: string): TaskState => state === "已取消" ? "失败" : state as TaskState;
 type DeletePostResult = { postId: string; state: string; detail: string };
 type DownloadSummary = { user: string; downloaded: number; skipped: number; failed: number; detail: string };
 type DownloadTaskConfig = { users: string[]; downloadDir: string; dateFrom: string; dateTo: string; mediaType: string; fileTemplate: string; folderTemplate: string; modifyFileTime: boolean };
@@ -236,8 +235,8 @@ function App() {
         invoke<PersistedDeleteTask[]>("get_delete_tasks"),
         invoke<PersistedDownloadTask[]>("get_download_tasks"),
       ]);
-      const deleteTasks: Task[] = savedDeletes.map(task => ({ id: task.id, title: task.title, kind: "删除", state: normalizeTaskState(task.state), progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }));
-      const downloadTasks: Task[] = savedDownloads.map(task => ({ ...task, state: normalizeTaskState(task.state), kind: "下载", downloadConfig: task.downloadConfig, downloadResults: task.downloadResults ?? [] }));
+      const deleteTasks: Task[] = savedDeletes.map(task => ({ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }));
+      const downloadTasks: Task[] = savedDownloads.map(task => ({ ...task, state: task.state, kind: "下载", downloadConfig: task.downloadConfig, downloadResults: task.downloadResults ?? [] }));
       const all = [...downloadTasks, ...deleteTasks].sort((a,b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
       setTasks(all);
       setSelectedTaskIds(current => current.filter(id => all.some(task => task.id === id)));
@@ -376,7 +375,7 @@ function App() {
     let disposed = false;
     void listen<PersistedDeleteTask>("delete-task-updated", event => {
       const task = event.payload;
-      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: normalizeTaskState(task.state), progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }, ...current.filter(item => item.id !== task.id)]);
+      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }, ...current.filter(item => item.id !== task.id)]);
     }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(reason => {
       log("error", "delete", `注册删除任务进度监听失败：${String(reason)}`);
     });
@@ -473,7 +472,7 @@ function App() {
     setExecutingDeleteTask(task.id);
     try {
       const result = await invoke<PersistedDeleteTask>("execute_delete_task", { taskId: task.id });
-      setTasks(current => [{ id: result.id, title: result.title, kind: "删除", state: normalizeTaskState(result.state), progress: result.progress, detail: result.detail, createdAt: result.createdAt, postIds: result.postIds, dateFrom: result.dateFrom, dateTo: result.dateTo, keyword: result.keyword, postType: result.postType, results: result.results }, ...current.filter(item => item.id !== result.id)]);
+      setTasks(current => [{ id: result.id, title: result.title, kind: "删除", state: result.state, progress: result.progress, detail: result.detail, createdAt: result.createdAt, postIds: result.postIds, dateFrom: result.dateFrom, dateTo: result.dateTo, keyword: result.keyword, postType: result.postType, results: result.results }, ...current.filter(item => item.id !== result.id)]);
       notify(result.state === "已完成" ? "删除任务执行完成。" : "删除任务结束：" + result.state);
     } catch (reason) {
       notify("执行删除任务失败：" + String(reason));
@@ -512,7 +511,7 @@ function App() {
       const task = await invoke<PersistedDeleteTask>("create_delete_task", {
         postIds, dateFrom: appliedDateFrom, dateTo: appliedDateTo, keyword: appliedKeyword.trim(), postType: appliedPostType,
       });
-      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: normalizeTaskState(task.state), progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }, ...current.filter(item => item.id !== task.id)]);
+      setTasks(current => [{ id: task.id, title: task.title, kind: "删除", state: task.state, progress: task.progress, detail: task.detail, createdAt: task.createdAt, postIds: task.postIds, dateFrom: task.dateFrom, dateTo: task.dateTo, keyword: task.keyword, postType: task.postType, results: task.results }, ...current.filter(item => item.id !== task.id)]);
       setShowDeleteConfirm(false);
       setPage("tasks");
       notify("删除任务已保存。请在任务中心再次确认后执行。");
