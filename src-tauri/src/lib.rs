@@ -64,6 +64,7 @@ pub fn run() {
             download::create_download_task,
             download::resolve_download_user,
             download::select_download_directory,
+            download::open_download_directory,
             download::get_download_tasks,
             download::save_download_task,
             download::remove_download_tasks,

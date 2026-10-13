@@ -34,9 +34,12 @@ fn task_control(control: &DownloadControl, task_id: u64) -> Arc<DownloadTaskCont
     let mut tasks = control.tasks.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     tasks.entry(task_id).or_insert_with(|| Arc::new(DownloadTaskControl::default())).clone()
 }
-struct DownloadExecutionGuard(Arc<DownloadTaskControl>);
+struct DownloadExecutionGuard {
+    task: Arc<DownloadTaskControl>,
+    _permit: Option<tokio::sync::OwnedSemaphorePermit>,
+}
 impl Drop for DownloadExecutionGuard {
-    fn drop(&mut self) { self.0.running.store(false, std::sync::atomic::Ordering::Release); }
+    fn drop(&mut self) { self.task.running.store(false, std::sync::atomic::Ordering::Release); }
 }
 #[tauri::command]
 pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) {
@@ -99,6 +102,23 @@ fn task_db(app: &AppHandle) -> Result<Connection, String> {
         .map_err(|e| format!("初始化任务表失败：{e}"))?;
     Ok(db)
 }
+
+#[tauri::command]
+pub fn open_download_directory(app: AppHandle, download_dir: String) -> Result<(), String> {
+    let path = resolve_download_root(&app, &download_dir)?;
+    if !path.is_dir() { return Err("下载目录不存在或不可访问。".into()); }
+    #[cfg(target_os = "windows")]
+    std::process::Command::new("explorer").arg(&path).spawn()
+        .map_err(|e| format!("无法打开下载目录：{e}"))?;
+    #[cfg(target_os = "macos")]
+    std::process::Command::new("open").arg(&path).spawn()
+        .map_err(|e| format!("无法打开下载目录：{e}"))?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    std::process::Command::new("xdg-open").arg(&path).spawn()
+        .map_err(|e| format!("无法打开下载目录：{e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn select_download_directory(app: AppHandle) -> Result<Option<String>, String> {
     let selected = app.dialog().file().blocking_pick_folder();
@@ -418,11 +438,9 @@ pub async fn download_media(
     if task_control.running.compare_exchange(false, true, std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire).is_err() {
         return Err("该下载任务已经在执行，不能重复启动。".into());
     }
-    let _execution_permit = match execution_gate.acquire().await {
-        Ok(permit) => permit,
-        Err(error) => { task_control.running.store(false, std::sync::atomic::Ordering::Release); return Err(error); }
-    };
-    let _execution_guard = DownloadExecutionGuard(task_control.clone());
+    let mut _execution_guard = DownloadExecutionGuard { task: task_control.clone(), _permit: None };
+    let permit = execution_gate.acquire().await?;
+    _execution_guard._permit = Some(permit);
     if task_control.paused.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已暂停。".into()); }
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let cookie = store.cookie()?;
