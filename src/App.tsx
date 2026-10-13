@@ -15,7 +15,7 @@ import {
 } from "./lib/filenameTemplate";
 
 type Page = "dashboard" | "accounts" | "delete" | "download" | "tasks" | "settings";
-type TaskState = "执行中" | "等待中" | "已暂停" | "已完成" | "失败" | "已取消";
+type TaskState = "未开始" | "排队中" | "执行中" | "暂停中" | "已暂停" | "已完成" | "失败";
 type DeletePostResult = { postId: string; state: string; detail: string };
 type DownloadSummary = { user: string; downloaded: number; skipped: number; failed: number; detail: string };
 type DownloadTaskConfig = { users: string[]; downloadDir: string; dateFrom: string; dateTo: string; mediaType: string; fileTemplate: string; folderTemplate: string; modifyFileTime: boolean };
@@ -129,7 +129,7 @@ function App() {
   const scheduleWaitingDownloadRef = useRef<() => void>(() => {});
   const [downloadStatus, setDownloadStatus] = useState("");
   const [downloadError, setDownloadError] = useState("");
-  const [concurrency, setConcurrency] = useState("3");
+  const concurrency = "1";
   const [requestIntervalMode, setRequestIntervalMode] = useState<"fixed" | "random">("fixed");
   const [requestDelay, setRequestDelay] = useState("1200");
   const [requestMinDelay, setRequestMinDelay] = useState("1000");
@@ -344,8 +344,7 @@ function App() {
       setPostsError(`取消读取失败：${String(reason)}`);
     }
   };
-  useEffect(() => { try { const saved = localStorage.getItem("wm-task-concurrency"); if (saved && ["1", "2", "3", "5"].includes(saved)) setConcurrency(saved); } catch { /* 使用默认并发数 */ } }, []);
-  useEffect(() => { scheduleWaitingDownloadRef.current(); }, [concurrency]);
+  useEffect(() => { scheduleWaitingDownloadRef.current(); }, []);
   const saveRequestInterval = async (config: RequestIntervalConfig) => {
     try {
       const saved = await invoke<RequestIntervalConfig>("save_request_interval", { config });
@@ -584,7 +583,7 @@ function App() {
     if (task.kind !== "下载" || !task.downloadConfig || activeDownloadIds.current.has(task.id)) return;
     const limit = Math.max(1, Number(concurrency) || 1);
     if (activeDownloadIds.current.size >= limit) {
-      const waitingTask = { ...task, state: "等待中" as TaskState, detail: "等待下载并发名额" };
+      const waitingTask = { ...task, state: "排队中" as TaskState, detail: "等待下载并发名额" };
       setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
       try { await invoke("save_download_task", { task: waitingTask }); } catch (reason) { log("error", "download", `保存等待任务状态失败：${String(reason)}`); }
       return;
@@ -648,7 +647,7 @@ function App() {
   scheduleWaitingDownloadRef.current = () => {
     const limit = Math.max(1, Number(concurrency) || 1);
     while (activeDownloadIds.current.size < limit) {
-      const next = tasksRef.current.find(item => item.kind === "下载" && item.state === "等待中" && item.downloadConfig && !activeDownloadIds.current.has(item.id));
+      const next = tasksRef.current.find(item => item.kind === "下载" && item.state === "排队中" && item.downloadConfig && !activeDownloadIds.current.has(item.id));
       if (!next) break;
       if (pausedDownloadIds.current.has(next.id)) void resumeDownloadTask(next); else void executeDownloadTask(next);
     }
@@ -657,7 +656,7 @@ function App() {
     const selected = tasksRef.current.filter(task => selectedTaskIds.includes(task.id));
     const downloads = selected.filter(task => task.kind === "下载" && task.downloadConfig && task.state !== "执行中" && task.state !== "已完成");
     downloads.forEach(task => void executeDownloadTask(task));
-    const deletions = selected.filter(task => task.kind === "删除" && (task.state === "等待中" || task.state === "失败" || task.state === "已取消"));
+    const deletions = selected.filter(task => task.kind === "删除" && (task.state === "未开始" || task.state === "失败" || task.state === "失败"));
     if (deletions.length) {
       setPendingDeleteStartIds(deletions.slice(1).map(task => task.id));
       setDeleteActionTask(deletions[0]);
@@ -691,7 +690,7 @@ function App() {
   };
   const resumeDownloadTask = async (task: Task) => {
     if (!activeDownloadIds.current.has(task.id) && activeDownloadIds.current.size >= Math.max(1, Number(concurrency) || 1)) {
-      const waitingTask = { ...task, state: "等待中" as TaskState, detail: "等待下载并发名额" };
+      const waitingTask = { ...task, state: "排队中" as TaskState, detail: "等待下载并发名额" };
       setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
       try { await invoke("save_download_task", { task: waitingTask }); } catch { /* 保持等待状态 */ }
       return;
@@ -748,13 +747,13 @@ function App() {
         <td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td>
         <td><TaskBadge state={task.state}/></td>
         <td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td>
-        <td className="task-detail-cell" title={task.kind === "删除" && task.state === "等待中" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}>{task.kind === "删除" && task.state === "等待中" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}</td>
+        <td className="task-detail-cell" title={task.kind === "删除" && task.state === "未开始" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}>{task.kind === "删除" && task.state === "未开始" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}</td>
         <td><div className="account-actions task-operation-actions">
           {task.kind === "删除" && task.state === "执行中" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停删除" aria-label="暂停删除" onClick={() => void pauseDeleteTask(task)}><Pause size={16} fill="currentColor" strokeWidth={2.5}/></button>}
           {task.kind === "删除" && task.state === "已暂停" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="继续删除" aria-label="继续删除" onClick={() => void resumeDeleteTask(task)}><Play size={16} fill="currentColor"/></button>}
           {task.kind === "删除" && task.state === "已完成" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="已完成" aria-label="已完成" disabled><Check size={16}/></button>}
-          {task.kind === "删除" && (task.state === "等待中" || task.state === "失败" || task.state === "已取消") && <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "等待中" ? "执行删除" : "重新开始删除"} aria-label={task.state === "等待中" ? "执行删除" : "重新开始删除"} disabled={executingDeleteTask !== null || cookieValidity === "checking"} onClick={() => setDeleteActionTask(task)}>{task.state === "等待中" ? <Play size={16} fill="currentColor"/> : <RefreshCw size={16}/>}</button>}
-          {task.kind === "下载" && task.downloadConfig && <>{task.state === "执行中" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停下载" aria-label="暂停下载" onClick={() => void pauseDownloadTask(task)}><Pause size={16} fill="currentColor" strokeWidth={2.5}/></button> : task.state === "已暂停" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="继续下载" aria-label="继续下载" onClick={() => void resumeDownloadTask(task)}><Play size={16} fill="currentColor"/></button> : task.state === "已完成" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="已完成" aria-label="已完成" disabled><Check size={16}/></button> : <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "失败" || task.state === "已取消" ? "重新开始下载" : "开始下载"} aria-label={task.state === "失败" || task.state === "已取消" ? "重新开始下载" : "开始下载"} disabled={cookieValidity === "checking"} onClick={() => void executeDownloadTask(task)}>{task.state === "失败" || task.state === "已取消" ? <RefreshCw size={16}/> : <Play size={16} fill="currentColor"/>}</button>}</>}
+          {task.kind === "删除" && (task.state === "未开始" || task.state === "失败" || task.state === "失败") && <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "未开始" ? "执行删除" : "重新开始删除"} aria-label={task.state === "未开始" ? "执行删除" : "重新开始删除"} disabled={executingDeleteTask !== null || cookieValidity === "checking"} onClick={() => setDeleteActionTask(task)}>{task.state === "未开始" ? <Play size={16} fill="currentColor"/> : <RefreshCw size={16}/>}</button>}
+          {task.kind === "下载" && task.downloadConfig && <>{task.state === "执行中" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停下载" aria-label="暂停下载" onClick={() => void pauseDownloadTask(task)}><Pause size={16} fill="currentColor" strokeWidth={2.5}/></button> : task.state === "已暂停" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="继续下载" aria-label="继续下载" onClick={() => void resumeDownloadTask(task)}><Play size={16} fill="currentColor"/></button> : task.state === "已完成" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="已完成" aria-label="已完成" disabled><Check size={16}/></button> : <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "失败" || task.state === "失败" ? "重新开始下载" : "开始下载"} aria-label={task.state === "失败" || task.state === "失败" ? "重新开始下载" : "开始下载"} disabled={cookieValidity === "checking"} onClick={() => void executeDownloadTask(task)}>{task.state === "失败" || task.state === "失败" ? <RefreshCw size={16}/> : <Play size={16} fill="currentColor"/>}</button>}</>}
         </div></td>
         <td><button className="icon-button task-action-icon" aria-label="更多任务信息" title="更多" onClick={() => setMoreTask(task)}><MoreHorizontal size={17}/></button></td>
       </tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；执行前会再次要求确认。" />}</div></div>      {moreTask && <div className="modal-backdrop" role="presentation"><div className="modal more-task-modal" role="dialog" aria-modal="true" aria-labelledby="more-task-title"><button className="icon-button more-task-close" aria-label="关闭任务详情" title="关闭" onClick={() => setMoreTask(null)}><X size={17}/></button><div className="modal-icon" style={{background:"#eef2ff",color:"#4f67ce"}}><MoreHorizontal/></div><h3 id="more-task-title">{moreTask.title}</h3>
@@ -763,14 +762,14 @@ function App() {
           {moreTask.results && moreTask.results.length > 0 && <div><strong>执行结果：</strong>已处理 {moreTask.results.length} 条，成功 {moreTask.results.filter(item => item.state === "已删除").length} 条，失败 {moreTask.results.filter(item => item.state === "失败").length} 条</div>}
           {moreTask.results?.some(item => item.state === "失败" && item.detail.trim()) && <div><strong>失败原因：</strong><div style={{display:"grid",gap:6,marginTop:6}}>{moreTask.results.filter(item => item.state === "失败" && item.detail.trim()).map(item => <div key={item.postId}>{item.postId}：{item.detail}</div>)}</div></div>}
           {(moreTask.dateFrom || moreTask.dateTo || moreTask.keyword?.trim() || (moreTask.postType && moreTask.postType !== "全部类型")) && <div><strong>筛选条件：</strong><div style={{display:"grid",gap:5,marginTop:6}}>{(moreTask.dateFrom || moreTask.dateTo) && <div>日期：{moreTask.dateFrom || "不限"} 至 {moreTask.dateTo || "不限"}</div>}{moreTask.postType && moreTask.postType !== "全部类型" && <div>微博类型：{moreTask.postType}</div>}{moreTask.keyword?.trim() && <div>关键词：{moreTask.keyword}</div>}</div></div>}
-          {moreTask.detail.trim() && moreTask.state !== "等待中" && <div><strong>任务信息：</strong>{moreTask.detail}</div>}
+          {moreTask.detail.trim() && moreTask.state !== "未开始" && <div><strong>任务信息：</strong>{moreTask.detail}</div>}
           {moreTask.results && moreTask.results.length > 0 && <div><strong>逐条结果：</strong><div style={{display:"grid",gap:6,marginTop:6}}>{moreTask.results.map(item => <div key={item.postId}>{item.postId} {item.state} {item.detail}</div>)}</div></div>}
           {moreTask.downloadConfig && <div><strong>目标用户：</strong><div style={{display:"grid",gap:5,marginTop:6}}>{moreTask.downloadConfig.users.map((user, index) => { const uid = extractWeiboUid(user); const url = /^https?:\/\//i.test(user) ? user : uid ? `https://weibo.com/u/${uid}` : user; return <div key={user + index}>{index + 1}. {uid || user} · {url}</div>; })}</div></div>}
           {moreTask.downloadConfig && <div><strong>筛选条件：</strong><div style={{display:"grid",gap:5,marginTop:6}}><div>开始日期：{moreTask.downloadConfig.dateFrom || "不限"}</div><div>结束日期：{moreTask.downloadConfig.dateTo || "不限"}</div><div>媒体类型：{moreTask.downloadConfig.mediaType === "all" ? "全部媒体" : moreTask.downloadConfig.mediaType === "images" ? "仅图片" : moreTask.downloadConfig.mediaType === "videos" ? "仅视频" : "仅 LivePhoto"}</div></div></div>}
           {moreTask.downloadConfig && <div><strong>下载设置：</strong><div style={{display:"grid",gap:5,marginTop:6}}><div>下载目录：{moreTask.downloadConfig.downloadDir}</div><div>修改创建日期：{moreTask.downloadConfig.modifyFileTime ? "开启" : "关闭"}</div><div>文件夹模板：{moreTask.downloadConfig.folderTemplate}</div><div>文件名模板：{moreTask.downloadConfig.fileTemplate}</div></div></div>}
           {moreTask.downloadResults && moreTask.downloadResults.length > 0 && <div><strong>逐用户结果：</strong><div style={{display:"grid",gap:8,marginTop:6}}>{moreTask.downloadResults.map((item, index) => <div key={item.user + index}><div>{item.user}</div><div>下载 {item.downloaded + item.skipped + item.failed}，成功 {item.downloaded}，跳过 {item.skipped}，失败 {item.failed}</div>{item.detail.trim() && <div>{item.detail}</div>}</div>)}</div></div>}
         </div></div></div>}
-            {deleteActionTask && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-action-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-action-title">{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "确认重试删除任务" : "确认执行删除任务"}</h3><p>{deleteActionTask.state === "失败" || deleteActionTask.state === "已取消" ? "任务“" + deleteActionTask.title + "”此前未完整完成。重试时会跳过已确认删除成功的微博，只处理失败或未处理项目。" : "即将向微博发送真实删除请求。任务“" + deleteActionTask.title + "”将逐条执行删除操作。"}</p><div className="warning-box">微博删除不可恢复，请确认任务内容后继续。</div><div className="modal-actions"><button className="button ghost" onClick={() => { setDeleteActionTask(null); setPendingDeleteStartIds([]); }}>取消</button><button className="button danger" onClick={() => void confirmDeleteTask()}>确认执行</button></div></div></div>}
+            {deleteActionTask && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-action-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-action-title">{deleteActionTask.state === "失败" || deleteActionTask.state === "失败" ? "确认重试删除任务" : "确认执行删除任务"}</h3><p>{deleteActionTask.state === "失败" || deleteActionTask.state === "失败" ? "任务“" + deleteActionTask.title + "”此前未完整完成。重试时会跳过已确认删除成功的微博，只处理失败或未处理项目。" : "即将向微博发送真实删除请求。任务“" + deleteActionTask.title + "”将逐条执行删除操作。"}</p><div className="warning-box">微博删除不可恢复，请确认任务内容后继续。</div><div className="modal-actions"><button className="button ghost" onClick={() => { setDeleteActionTask(null); setPendingDeleteStartIds([]); }}>取消</button><button className="button danger" onClick={() => void confirmDeleteTask()}>确认执行</button></div></div></div>}
             {showDeleteTasksConfirm && <div className="modal-backdrop" role="presentation"><div className="modal" role="dialog" aria-modal="true" aria-labelledby="delete-tasks-title"><div className="modal-icon warning"><Trash2/></div><h3 id="delete-tasks-title">确认删除任务记录</h3><p>确定删除选中的 {selectedTaskCount} 条任务记录吗？删除任务记录不会撤销已经在微博执行的删除操作。</p><div className="modal-actions"><button className="button ghost" onClick={() => setShowDeleteTasksConfirm(false)}>取消</button><button className="button danger" onClick={() => void removeSelectedTasks()}>确认删除</button></div></div></div>}
     </section>;
     // 设置页面由右侧分区承载；左侧菜单负责切换并定位到对应分区。
@@ -780,7 +779,6 @@ function App() {
         <section className="panel settings-section" id="settings-general">
           <div className="panel-title"><div><strong>常规设置</strong><span>个性化应用显示与任务行为</span></div></div>
           <Field label="主题"><select value={theme} onChange={e => { setTheme(e.target.value); setDark(e.target.value === "dark"); }}><option value="system">跟随系统（当前预览为浅色）</option><option value="light">浅色</option><option value="dark">深色</option></select></Field>
-          <div className="setting-row"><div><strong>任务并发数</strong><span>同时处理的任务数量</span></div><select value={concurrency} onChange={e => { setConcurrency(e.target.value); localStorage.setItem("wm-task-concurrency", e.target.value); scheduleWaitingDownloadRef.current(); }}><option value="1">1 个</option><option value="2">2 个</option><option value="3">3 个</option><option value="5">5 个</option></select></div>
           <div className="setting-row request-interval-row"><div><strong>请求间隔</strong><span>统一配置网络请求的等待间隔</span></div><div className="request-interval-controls"><select aria-label="请求间隔模式" value={requestIntervalMode} onChange={e => { const mode = e.target.value as "fixed" | "random"; setRequestIntervalMode(mode); void saveRequestInterval({ mode, fixedMs: Number(requestDelay), minMs: Number(requestMinDelay), maxMs: Number(requestMaxDelay) }); }}><option value="fixed">固定间隔</option><option value="random">随机范围</option></select>{requestIntervalMode === "fixed" ? <select aria-label="固定请求间隔" value={requestDelay} onChange={e => { setRequestDelay(e.target.value); void saveRequestInterval({ mode: "fixed", fixedMs: Number(e.target.value), minMs: Number(requestMinDelay), maxMs: Number(requestMaxDelay) }); }}><option value="800">800 毫秒</option><option value="1200">1200 毫秒</option><option value="2000">2000 毫秒</option><option value="3000">3000 毫秒</option><option value="5000">5000 毫秒</option></select> : <div className="request-range"><label>最短 <input type="number" min="500" max="30000" step="100" value={requestMinDelay} onChange={e => setRequestMinDelay(e.target.value)} onBlur={() => { const min = Math.max(500, Number(requestMinDelay) || 500); const max = Math.max(min, Number(requestMaxDelay) || min); void saveRequestInterval({ mode: "random", fixedMs: Number(requestDelay), minMs: min, maxMs: max }); }} /> ms</label><label>最长 <input type="number" min="500" max="60000" step="100" value={requestMaxDelay} onChange={e => setRequestMaxDelay(e.target.value)} onBlur={() => { const min = Math.max(500, Number(requestMinDelay) || 500); const max = Math.max(min, Number(requestMaxDelay) || min); void saveRequestInterval({ mode: "random", fixedMs: Number(requestDelay), minMs: min, maxMs: max }); }} /> ms</label></div>}</div></div>
           <div className="setting-row"><div><strong>运行日志</strong><span>记录前后端关键操作与错误，关闭后停止写入</span></div><label className="log-toggle"><input type="checkbox" checked={loggingEnabled} onChange={e => { void toggleLogging(e.target.checked); }} /><span>{loggingEnabled ? "已开启" : "已关闭"}</span></label></div>
           <div className="setting-row"><div><strong>日志文件夹</strong><span>查看已保存的运行日志文件</span></div><button className="button secondary" onClick={() => { void openLogFolder(); }}><FolderOpen size={15}/> 打开日志文件夹</button></div>
@@ -1053,7 +1051,7 @@ function Accounts({ notify, onCookieDeleted, onCookieStatusChange }: {notify: (m
 
   </div>;
 }
-function TaskBadge({ state }: {state: TaskState}) { const cls = state === "已完成" ? "green" : state === "执行中" ? "blue" : state === "失败" ? "red" : state === "等待中" ? "amber" : "neutral"; return <span className={`tag ${cls}`}><span className="tag-dot"/>{state}</span>; }
+function TaskBadge({ state }: {state: TaskState}) { const cls = state === "已完成" ? "green" : state === "执行中" ? "blue" : state === "失败" ? "red" : state === "未开始" ? "amber" : "neutral"; return <span className={`tag ${cls}`}><span className="tag-dot"/>{state}</span>; }
 function EmptyState({ title, description }: {title: string; description: string}) { return <div className="empty-state"><div className="empty-icon"><Archive size={22}/></div><strong>{title}</strong><span>{description}</span></div>; }
 
 export default App;

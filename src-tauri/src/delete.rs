@@ -311,7 +311,7 @@ pub fn create_delete_task(
     }
     let mut claimed = std::collections::HashSet::new();
     {
-        let mut statement = tx.prepare("SELECT state, detail FROM tasks WHERE kind='删除' AND state IN ('等待中','执行中','失败','已取消')")
+        let mut statement = tx.prepare("SELECT state, detail FROM tasks WHERE kind='删除' AND state IN ('未开始','执行中','失败')")
             .map_err(|e| format!("检查重复删除任务失败：{e}"))?;
         let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
             .map_err(|e| format!("读取现有删除任务失败：{e}"))?;
@@ -340,7 +340,7 @@ pub fn create_delete_task(
         if skipped > 0 { format!("，已跳过与其他未完成任务重叠的 {} 条微博", skipped) } else { String::new() });
     let task = DeleteTask {
         id, title: format!("微博删除 {} 条", post_ids.len()), kind: "删除".into(),
-        state: "等待中".into(), progress: 0, detail, created_at: created_at.clone(),
+        state: "未开始".into(), progress: 0, detail, created_at: created_at.clone(),
         post_ids, date_from, date_to, keyword, post_type, results: Vec::new(),
     };
     let serialized = serde_json::to_string(&task).map_err(|e| format!("序列化任务失败：{e}"))?;
@@ -539,11 +539,11 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  let config=client.get("https://m.weibo.cn/api/config").header(COOKIE,cookie.as_str()).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(ACCEPT,"application/json, text/plain, */*").send().await.map_err(|e|format!("验证微博会话失败：{e}"))?;
  if !config.status().is_success(){return Err(format!("验证微博会话失败，HTTP {}",config.status().as_u16()));}let json:Value=config.json().await.map_err(|e|format!("解析微博账号信息失败：{e}"))?;
  let uid=json.pointer("/data/uid").and_then(Value::as_u64).map(|v|v.to_string()).or_else(||json.pointer("/data/uid").and_then(Value::as_str).map(str::to_string)).filter(|v|!v.is_empty()&&v!="0").ok_or_else(||"无法识别当前微博 UID，未执行删除。".to_string())?;
- let retry=task.state=="失败"||task.state=="已取消";let successful:std::collections::HashSet<String>=task.results.iter().filter(|r|r.state=="已删除").map(|r|r.post_id.clone()).collect();
+ let retry=task.state=="失败";let successful:std::collections::HashSet<String>=task.results.iter().filter(|r|r.state=="已删除").map(|r|r.post_id.clone()).collect();
  let mut claimed=std::collections::HashSet::new();
  {
    let db=db_connection(&app)?;
-   let mut statement=db.prepare("SELECT id, detail FROM tasks WHERE kind='删除' AND id<>?1 AND state IN ('等待中','执行中','失败','已取消')")
+   let mut statement=db.prepare("SELECT id, detail FROM tasks WHERE kind='删除' AND id<>?1 AND state IN ('未开始','执行中','失败')")
      .map_err(|e|format!("执行前检查重复微博失败：{e}"))?;
    let rows=statement.query_map(params![task.id.to_string()],|row|Ok(row.get::<_,String>(1)?))
      .map_err(|e|format!("读取其他删除任务失败：{e}"))?;
@@ -578,7 +578,7 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  let (state,detail)=match outcome{Ok(())=>("已删除".to_string(),"已收到可确认的删除成功页面".to_string()),Err(e)=>("失败".to_string(),e)};let fatal=detail.contains("HTTP 401")||detail.contains("HTTP 403")||detail.contains("风控");
  task.results.retain(|r|r.post_id!=id);task.results.push(DeletePostResult{post_id:id,state,detail});task.progress=((task.results.len()*100)/task.post_ids.len()).min(100)as u8;let ok=task.results.iter().filter(|r|r.state=="已删除").count();let failed=task.results.iter().filter(|r|r.state=="失败").count();task.detail=format!("已处理 {}/{} 条；成功 {} 条，失败 {} 条",task.results.len(),task.post_ids.len(),ok,failed);
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());if fatal{break;}task_sleep(crate::settings::request_delay_ms(&app)).await;}
- if control.task_cancelled.load(Ordering::Relaxed){task.state="已取消".into();task.detail=format!("任务已取消，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if task.results.iter().any(|r|r.state=="失败")||task.results.len()<task.post_ids.len(){task.state="失败".into();}else{task.state="已完成".into();}
+ if control.task_cancelled.load(Ordering::Relaxed){task.state="失败".into();task.detail=format!("任务失败，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if task.results.iter().any(|r|r.state=="失败")||task.results.len()<task.post_ids.len(){task.state="失败".into();}else{task.state="已完成".into();}
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());Ok(task)
 }
 
