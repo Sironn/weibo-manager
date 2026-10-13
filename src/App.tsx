@@ -131,7 +131,6 @@ function App() {
   const scheduleWaitingDownloadRef = useRef<() => void>(() => {});
   const [downloadStatus, setDownloadStatus] = useState("");
   const [downloadError, setDownloadError] = useState("");
-  const concurrency = "1";
   const [requestIntervalMode, setRequestIntervalMode] = useState<"fixed" | "random">("fixed");
   const [requestDelay, setRequestDelay] = useState("1200");
   const [requestMinDelay, setRequestMinDelay] = useState("1000");
@@ -602,21 +601,31 @@ function App() {
     if (pausedDownloadIds.current.has(task.id)) {
       activeDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
+      if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
       scheduleWaitingDownloadRef.current();
       return;
     }
     if (!valid) {
       activeDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
+      if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
       scheduleWaitingDownloadRef.current();
       notify("Cookie 不可用，无法启动下载任务。");
       return;
     }
     try {
       await invoke("prepare_download_task", { taskId: task.id });
+      if (pausedDownloadIds.current.has(task.id)) {
+        activeDownloadIds.current.delete(task.id);
+        setDownloadBusy(activeDownloadIds.current.size > 0);
+        if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
+        scheduleWaitingDownloadRef.current();
+        return;
+      }
     } catch (reason) {
       activeDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
+      if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
       scheduleWaitingDownloadRef.current();
       notify(`准备下载任务失败：${String(reason)}`);
       return;
@@ -676,7 +685,7 @@ function App() {
     const selected = tasksRef.current.filter(task => selectedTaskIds.includes(task.id));
     const downloads = selected.filter(task => task.kind === "下载" && task.downloadConfig && task.state !== "执行中" && task.state !== "已完成");
     downloads.forEach(task => void executeDownloadTask(task));
-    const deletions = selected.filter(task => task.kind === "删除" && (task.state === "未开始" || task.state === "失败" || task.state === "失败"));
+    const deletions = selected.filter(task => task.kind === "删除" && (task.state === "未开始" || task.state === "失败"));
     if (deletions.length) {
       setPendingDeleteStartIds(deletions.slice(1).map(task => task.id));
       setDeleteActionTask(deletions[0]);
@@ -773,10 +782,12 @@ function App() {
         <td className="task-detail-cell" title={task.kind === "删除" && task.state === "未开始" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}>{task.kind === "删除" && task.state === "未开始" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}</td>
         <td><div className="account-actions task-operation-actions">
           {task.kind === "删除" && task.state === "执行中" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停删除" aria-label="暂停删除" onClick={() => void pauseDeleteTask(task)}><Pause size={16} fill="currentColor" strokeWidth={2.5}/></button>}
+          {task.kind === "删除" && task.state === "暂停中" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="正在暂停" aria-label="正在暂停" disabled><Pause size={16} fill="currentColor"/></button>}
+          {task.kind === "删除" && task.state === "排队中" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停任务" aria-label="暂停任务" onClick={() => void pauseDeleteTask(task)}><Pause size={16} fill="currentColor"/></button>}
           {task.kind === "删除" && task.state === "已暂停" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="继续删除" aria-label="继续删除" onClick={() => void resumeDeleteTask(task)}><Play size={16} fill="currentColor"/></button>}
           {task.kind === "删除" && task.state === "已完成" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="已完成" aria-label="已完成" disabled><Check size={16}/></button>}
-          {task.kind === "删除" && (task.state === "未开始" || task.state === "失败" || task.state === "失败") && <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "未开始" ? "执行删除" : "重新开始删除"} aria-label={task.state === "未开始" ? "执行删除" : "重新开始删除"} disabled={executingDeleteTask !== null || cookieValidity === "checking"} onClick={() => setDeleteActionTask(task)}>{task.state === "未开始" ? <Play size={16} fill="currentColor"/> : <RefreshCw size={16}/>}</button>}
-          {task.kind === "下载" && task.downloadConfig && <>{task.state === "执行中" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停下载" aria-label="暂停下载" onClick={() => void pauseDownloadTask(task)}><Pause size={16} fill="currentColor" strokeWidth={2.5}/></button> : task.state === "已暂停" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="继续下载" aria-label="继续下载" onClick={() => void resumeDownloadTask(task)}><Play size={16} fill="currentColor"/></button> : task.state === "已完成" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="已完成" aria-label="已完成" disabled><Check size={16}/></button> : <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "失败" || task.state === "失败" ? "重新开始下载" : "开始下载"} aria-label={task.state === "失败" || task.state === "失败" ? "重新开始下载" : "开始下载"} disabled={cookieValidity === "checking"} onClick={() => void executeDownloadTask(task)}>{task.state === "失败" || task.state === "失败" ? <RefreshCw size={16}/> : <Play size={16} fill="currentColor"/>}</button>}</>}
+          {task.kind === "删除" && (task.state === "未开始" || task.state === "失败") && <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "未开始" ? "执行删除" : "重新开始删除"} aria-label={task.state === "未开始" ? "执行删除" : "重新开始删除"} disabled={executingDeleteTask !== null || cookieValidity === "checking"} onClick={() => setDeleteActionTask(task)}>{task.state === "未开始" ? <Play size={16} fill="currentColor"/> : <RefreshCw size={16}/>}</button>}
+          {task.kind === "下载" && task.downloadConfig && <>{task.state === "执行中" || task.state === "排队中" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停任务" aria-label="暂停任务" onClick={() => void pauseDownloadTask(task)}><Pause size={16} fill="currentColor" strokeWidth={2.5}/></button> : task.state === "暂停中" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="正在暂停" aria-label="正在暂停" disabled><Pause size={16} fill="currentColor"/></button> : task.state === "已暂停" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="继续下载" aria-label="继续下载" onClick={() => void resumeDownloadTask(task)}><Play size={16} fill="currentColor"/></button> : task.state === "已完成" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="已完成" aria-label="已完成" disabled><Check size={16}/></button> : <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "失败" ? "重新开始下载" : "开始下载"} aria-label={task.state === "失败" ? "重新开始下载" : "开始下载"} disabled={cookieValidity === "checking"} onClick={() => void executeDownloadTask(task)}>{task.state === "失败" ? <RefreshCw size={16}/> : <Play size={16} fill="currentColor"/>}</button>}</>}
         </div></td>
         <td><button className="icon-button task-action-icon" aria-label="更多任务信息" title="更多" onClick={() => setMoreTask(task)}><MoreHorizontal size={17}/></button></td>
       </tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；执行前会再次要求确认。" />}</div></div>      {moreTask && <div className="modal-backdrop" role="presentation"><div className="modal more-task-modal" role="dialog" aria-modal="true" aria-labelledby="more-task-title"><button className="icon-button more-task-close" aria-label="关闭任务详情" title="关闭" onClick={() => setMoreTask(null)}><X size={17}/></button><div className="modal-icon" style={{background:"#eef2ff",color:"#4f67ce"}}><MoreHorizontal/></div><h3 id="more-task-title">{moreTask.title}</h3>
