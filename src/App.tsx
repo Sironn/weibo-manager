@@ -728,13 +728,13 @@ function App() {
       return;
     }
     try {
+      const waitingTask = { ...task, state: "等待中" as TaskState, detail: "等待全局任务名额" };
+      setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
+      await invoke("save_download_task", { task: waitingTask });
       await invoke("set_download_paused", { taskId: task.id, paused: false });
       pausedDownloadIds.current.delete(task.id);
       activeDownloadIds.current.add(task.id);
       setDownloadBusy(true);
-      const resumedTask = { ...task, state: "执行中" as TaskState, detail: "正在下载媒体" };
-      setTasks(current => current.map(item => item.id === task.id ? resumedTask : item));
-      await invoke("save_download_task", { task: resumedTask });
     } catch (reason) { notify(`恢复下载失败：${String(reason)}`); }
   };
   const saveFilenameSettings = (next: FilenameSettings) => {
