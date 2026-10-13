@@ -357,6 +357,20 @@ function App() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
+    void listen<number>("task-scheduler-started", event => {
+      const task = tasksRef.current.find(item => item.id === event.payload && item.kind === "下载");
+      if (!task) return;
+      const startedTask = { ...task, state: "执行中" as TaskState, progress: Math.max(1, task.progress), detail: "正在读取微博数据并下载媒体" };
+      setTasks(current => current.map(item => item.id === task.id ? startedTask : item));
+      void invoke("save_download_task", { task: startedTask }).catch(reason => log("error", "download", `保存已开始的下载任务状态失败：${String(reason)}`));
+    }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(reason => {
+      log("error", "download", `注册全局调度事件监听失败：${String(reason)}`);
+    });
+    return () => { disposed = true; if (unlisten) unlisten(); };
+  }, []);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
     void listen<{ taskId: number; user: string; completed: number; total: number; mediaId: string; phase: string; detail: string }>("download-progress", event => {
       const progress = event.payload;
       setTasks(current => current.map(task => task.kind === "下载" && task.id === progress.taskId && task.state === "执行中"
@@ -609,10 +623,10 @@ function App() {
       notify(`准备下载任务失败：${String(reason)}`);
       return;
     }
-    const startedTask = { ...task, state: "执行中" as TaskState, progress: 1, detail: "正在读取微博数据并下载媒体" };
+    const startedTask = { ...task, state: "等待中" as TaskState, progress: Math.max(1, task.progress), detail: "等待全局任务名额" };
     setTasks(current => current.map(item => item.id === task.id ? startedTask : item));
-    try { await invoke("save_download_task", { task: startedTask }); } catch (reason) { log("error", "download", `保存下载任务状态失败：${String(reason)}`); }
-    setDownloadStatus("正在读取微博数据并下载媒体，请保持应用运行。");
+    try { await invoke("save_download_task", { task: startedTask }); } catch (reason) { log("error", "download", `保存等待中的下载任务状态失败：${String(reason)}`); }
+    setDownloadStatus("下载任务正在等待全局任务名额。");
     log("info", "download", `任务 ${task.id} 开始执行，目标用户数：${task.downloadConfig.users.length}`);
     try {
       const results = await invoke<Array<{ user: string; downloaded: number; skipped: number; failed: number; detail: string }>>("download_media", { ...task.downloadConfig, taskId: task.id });
