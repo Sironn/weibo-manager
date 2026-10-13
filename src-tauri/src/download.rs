@@ -431,6 +431,7 @@ pub async fn download_media(
     };
     let mut summaries = Vec::new();
 
+    let mut scheduler_started_emitted = false;
     for input in users {
         let uid = match user_id_from_input(&input) {
             Ok(id) => id,
@@ -451,6 +452,10 @@ pub async fn download_media(
 
         loop {
             wait_download_resume(&task_control, &scheduler, &mut scheduler_permit).await?;
+            if !scheduler_started_emitted {
+                let _ = app.emit("task-scheduler-started", task_id);
+                scheduler_started_emitted = true;
+            }
             if page > 100 { break; }
             let endpoint = format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}&containerid=107603{uid}");
             let mut request = client.get(&endpoint)
