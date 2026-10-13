@@ -5,7 +5,17 @@ mod logger;
 mod settings;
 
 use rusqlite::Connection;
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+/// 下载和删除任务共用的全局执行额度。
+pub(crate) struct TaskScheduler { semaphore: Arc<Semaphore> }
+impl Default for TaskScheduler { fn default() -> Self { Self { semaphore: Arc::new(Semaphore::new(1)) } } }
+impl TaskScheduler {
+    pub(crate) async fn acquire(&self) -> Result<OwnedSemaphorePermit, String> {
+        self.semaphore.clone().acquire_owned().await.map_err(|_| "全局任务调度器已关闭。".to_string())
+    }
+}
 use tauri::{Manager, RunEvent, WindowEvent};
 
 fn app_data_file(app: &tauri::AppHandle, name: &str) -> Option<PathBuf> {
@@ -20,6 +30,7 @@ pub fn run() {
             let handle = app.handle().clone();
             let saved_settings = settings::load_with_migration(&handle);
             app.manage(delete::DeleteSearchControl::default());
+            app.manage(TaskScheduler::default());
             app.manage(download::DownloadControl::default());
             // 启动时从独立配置文件恢复 Cookie；Cookie 不写入日志。
             app.manage(auth::SessionStore::from_saved_cookie(saved_settings.cookie.clone()));
