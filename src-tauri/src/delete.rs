@@ -519,6 +519,7 @@ async fn delete_one(client: &reqwest::Client, url: &str, uid: &str, cookie: &str
 #[tauri::command]
 pub async fn set_delete_task_paused(task_id:u64,paused:bool,app:AppHandle,control:State<'_,DeleteSearchControl>)->String{
  control.task_paused.store(paused,Ordering::Release);
+ if !paused { return "执行中".into(); }
  if paused {
    while control.task_running.load(Ordering::Acquire) { tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
    if let Ok(mut task)=load_delete_task(&app,task_id) {
