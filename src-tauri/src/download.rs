@@ -415,6 +415,7 @@ pub async fn download_media(
     folder_template: String,
     modify_file_time: bool,
     control: State<'_, DownloadControl>,
+    execution_gate: State<'_, crate::task_execution::TaskExecutionGate>,
 ) -> Result<Vec<DownloadSummary>, String> {
     let task_control = task_control(&control, task_id);
     if task_control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
@@ -422,6 +423,7 @@ pub async fn download_media(
         return Err("该下载任务已经在执行，不能重复启动。".into());
     }
     let _execution_guard = DownloadExecutionGuard(task_control.clone());
+    let _execution_permit = execution_gate.acquire().await?;
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let cookie = store.cookie()?;
     if crate::auth::check_cookie_availability(&cookie).await? != "valid" {
