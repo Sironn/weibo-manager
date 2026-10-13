@@ -18,9 +18,10 @@ struct DownloadTaskControl {
     paused: std::sync::atomic::AtomicBool,
     cancelled: std::sync::atomic::AtomicBool,
     running: std::sync::atomic::AtomicBool,
+    notify: tokio::sync::Notify,
 }
 impl Default for DownloadTaskControl {
-    fn default() -> Self { Self { paused: std::sync::atomic::AtomicBool::new(false), cancelled: std::sync::atomic::AtomicBool::new(false), running: std::sync::atomic::AtomicBool::new(false) } }
+    fn default() -> Self { Self { paused: std::sync::atomic::AtomicBool::new(false), cancelled: std::sync::atomic::AtomicBool::new(false), running: std::sync::atomic::AtomicBool::new(false), notify: tokio::sync::Notify::new() } }
 }
 /// Cookie 被删除或替换时，取消所有下载任务并解除暂停，避免任务一直卡住。
 pub fn cancel_all_downloads(control: &DownloadControl) {
@@ -28,6 +29,7 @@ pub fn cancel_all_downloads(control: &DownloadControl) {
     for task in tasks.values() {
         task.cancelled.store(true, std::sync::atomic::Ordering::Release);
         task.paused.store(false, std::sync::atomic::Ordering::Release);
+        task.notify.notify_one();
     }
 }
 fn task_control(control: &DownloadControl, task_id: u64) -> Arc<DownloadTaskControl> {
@@ -43,24 +45,26 @@ pub fn prepare_download_task(task_id: u64, control: State<'_, DownloadControl>) 
     let task = task_control(&control, task_id);
     task.cancelled.store(false, std::sync::atomic::Ordering::Release);
     task.paused.store(false, std::sync::atomic::Ordering::Release);
+    task.notify.notify_one();
 }
 async fn acquire_download_slot(control: &DownloadTaskControl, scheduler: &TaskScheduler) -> Result<tokio::sync::OwnedSemaphorePermit, String> {
     loop {
         if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
+        let notified = control.notify.notified();
         if control.paused.load(std::sync::atomic::Ordering::Acquire) {
-            tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(100))).await.ok();
+            notified.await;
             continue;
         }
         tokio::select! {
             permit = scheduler.acquire() => {
                 let acquired = permit?;
-                if control.paused.load(std::sync::atomic::Ordering::Acquire) {
+                if control.paused.load(std::sync::atomic::Ordering::Acquire) || control.cancelled.load(std::sync::atomic::Ordering::Acquire) {
                     drop(acquired);
                 } else {
                     return Ok(acquired);
                 }
             },
-            _ = tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(100))) => {}
+            _ = notified => {}
         }
     }
 }
@@ -69,7 +73,10 @@ async fn wait_download_resume(app: &AppHandle, task_id: u64, control: &DownloadT
         while control.paused.load(std::sync::atomic::Ordering::Acquire) {
             permit.take();
             if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
-            tauri::async_runtime::spawn_blocking(|| std::thread::sleep(Duration::from_millis(150))).await.ok();
+            let notified = control.notify.notified();
+            if control.paused.load(std::sync::atomic::Ordering::Acquire) && !control.cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                notified.await;
+            }
         }
         if control.cancelled.load(std::sync::atomic::Ordering::Acquire) { return Err("下载任务已取消。".into()); }
         if permit.is_none() {
@@ -82,13 +89,16 @@ async fn wait_download_resume(app: &AppHandle, task_id: u64, control: &DownloadT
 }
 #[tauri::command]
 pub fn set_download_paused(task_id: u64, paused: bool, control: State<'_, DownloadControl>) {
-    task_control(&control, task_id).paused.store(paused, std::sync::atomic::Ordering::Release);
+    let task = task_control(&control, task_id);
+    task.paused.store(paused, std::sync::atomic::Ordering::Release);
+    task.notify.notify_one();
 }
 #[tauri::command]
 pub fn cancel_download(task_id: u64, control: State<'_, DownloadControl>) {
     let task = task_control(&control, task_id);
     task.cancelled.store(true, std::sync::atomic::Ordering::Release);
     task.paused.store(false, std::sync::atomic::Ordering::Release);
+    task.notify.notify_one();
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
