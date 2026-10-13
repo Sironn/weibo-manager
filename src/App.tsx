@@ -345,6 +345,7 @@ function App() {
     }
   };
   useEffect(() => { scheduleWaitingDownloadRef.current(); }, []);
+  useEffect(() => { if (executingDeleteTask === null) scheduleWaitingDownloadRef.current(); }, [executingDeleteTask]);
   const saveRequestInterval = async (config: RequestIntervalConfig) => {
     try {
       const saved = await invoke<RequestIntervalConfig>("save_request_interval", { config });
@@ -581,8 +582,8 @@ function App() {
   };
   const executeDownloadTask = async (task: Task) => {
     if (task.kind !== "下载" || !task.downloadConfig || activeDownloadIds.current.has(task.id)) return;
-    const limit = Math.max(1, Number(concurrency) || 1);
-    if (activeDownloadIds.current.size >= limit) {
+    const limit = 1;
+    if (executingDeleteTask !== null || activeDownloadIds.current.size >= limit) {
       const waitingTask = { ...task, state: "排队中" as TaskState, detail: "等待下载并发名额" };
       setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
       try { await invoke("save_download_task", { task: waitingTask }); } catch (reason) { log("error", "download", `保存等待任务状态失败：${String(reason)}`); }
@@ -591,6 +592,12 @@ function App() {
     activeDownloadIds.current.add(task.id);
     setDownloadBusy(true);
     const valid = await refreshDownloadCookieValidity();
+    if (pausedDownloadIds.current.has(task.id)) {
+      activeDownloadIds.current.delete(task.id);
+      setDownloadBusy(activeDownloadIds.current.size > 0);
+      scheduleWaitingDownloadRef.current();
+      return;
+    }
     if (!valid) {
       activeDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
@@ -628,8 +635,12 @@ function App() {
       log(state === "失败" ? "error" : "info", "download", detail);
     } catch (reason) {
       const detail = String(reason);
-      if (detail.includes("下载任务已取消")) {
-        log("info", "download", `任务 ${task.id} 已取消，按任务删除请求停止执行。`);
+      if (detail.includes("下载任务已暂停")) {
+        const pausedTask = { ...startedTask, state: "已暂停" as TaskState, detail: "已暂停，点击开始后继续下载" };
+        setTasks(current => current.map(item => item.id === task.id ? pausedTask : item));
+        try { await invoke("save_download_task", { task: pausedTask }); } catch (saveReason) { log("error", "download", `保存暂停任务状态失败：${String(saveReason)}`); }
+      } else if (detail.includes("下载任务已取消")) {
+        log("info", "download", `任务 ${task.id} 已停止，按任务删除请求停止执行。`);
       } else {
         const failedTask = { ...startedTask, state: "失败" as TaskState, progress: 100, detail };
         setTasks(current => current.map(item => item.id === task.id ? failedTask : item));
@@ -645,7 +656,8 @@ function App() {
     }
   };
   scheduleWaitingDownloadRef.current = () => {
-    const limit = Math.max(1, Number(concurrency) || 1);
+    if (executingDeleteTask !== null) return;
+    const limit = 1;
     while (activeDownloadIds.current.size < limit) {
       const next = tasksRef.current.find(item => item.kind === "下载" && item.state === "排队中" && item.downloadConfig && !activeDownloadIds.current.has(item.id));
       if (!next) break;
@@ -665,45 +677,41 @@ function App() {
     else notify("所选任务中没有可以开始的任务。");
   };
   const pauseDeleteTask = async (task: Task) => {
+    setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "暂停中", detail: "正在停止后台删除工作" } : item));
     try {
       await invoke("set_delete_task_paused", { paused: true });
       setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "已暂停", detail: "已暂停，点击开始后继续执行" } : item));
-    } catch (reason) { notify(`暂停删除任务失败：${String(reason)}`); }
+    } catch (reason) { notify(`暂停删除失败：${String(reason)}`); }
   };
   const resumeDeleteTask = async (task: Task) => {
+    setExecutingDeleteTask(task.id);
+    setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "执行中", detail: "正在恢复删除任务" } : item));
     try {
-      await invoke("set_delete_task_paused", { paused: false });
-      setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "执行中", detail: "正在执行删除任务" } : item));
-    } catch (reason) { notify(`恢复删除任务失败：${String(reason)}`); }
+      const result = await invoke<PersistedDeleteTask>("execute_delete_task", { taskId: task.id });
+      setTasks(current => current.map(item => item.id === result.id ? { ...item, state: result.state, progress: result.progress, detail: result.detail, results: result.results } : item));
+    } catch (reason) { notify(`恢复删除失败：${String(reason)}`); }
+    finally { setExecutingDeleteTask(null); }
   };
   const pauseDownloadTask = async (task: Task) => {
+    pausedDownloadIds.current.add(task.id);
+    const pausingTask = { ...task, state: "暂停中" as TaskState, detail: "正在停止后台下载工作" };
+    setTasks(current => current.map(item => item.id === task.id ? pausingTask : item));
     try {
       await invoke("set_download_paused", { taskId: task.id, paused: true });
       const pausedTask = { ...task, state: "已暂停" as TaskState, detail: "已暂停，点击开始后继续下载" };
-      pausedDownloadIds.current.add(task.id);
-      activeDownloadIds.current.delete(task.id);
-      setDownloadBusy(activeDownloadIds.current.size > 0);
       setTasks(current => current.map(item => item.id === task.id ? pausedTask : item));
       await invoke("save_download_task", { task: pausedTask });
-      scheduleWaitingDownloadRef.current();
     } catch (reason) { notify(`暂停下载失败：${String(reason)}`); }
   };
   const resumeDownloadTask = async (task: Task) => {
-    if (!activeDownloadIds.current.has(task.id) && activeDownloadIds.current.size >= Math.max(1, Number(concurrency) || 1)) {
+    if (!activeDownloadIds.current.has(task.id) && activeDownloadIds.current.size >= 1) {
       const waitingTask = { ...task, state: "排队中" as TaskState, detail: "等待下载并发名额" };
       setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
-      try { await invoke("save_download_task", { task: waitingTask }); } catch { /* 保持等待状态 */ }
+      try { await invoke("save_download_task", { task: waitingTask }); } catch { /* 保持排队状态 */ }
       return;
     }
-    try {
-      await invoke("set_download_paused", { taskId: task.id, paused: false });
-      pausedDownloadIds.current.delete(task.id);
-      activeDownloadIds.current.add(task.id);
-      setDownloadBusy(true);
-      const resumedTask = { ...task, state: "执行中" as TaskState, detail: "正在下载媒体" };
-      setTasks(current => current.map(item => item.id === task.id ? resumedTask : item));
-      await invoke("save_download_task", { task: resumedTask });
-    } catch (reason) { notify(`恢复下载失败：${String(reason)}`); }
+    pausedDownloadIds.current.delete(task.id);
+    void executeDownloadTask({ ...task, state: "未开始" });
   };
   const saveFilenameSettings = (next: FilenameSettings) => {
     setFilenameSettings(next);

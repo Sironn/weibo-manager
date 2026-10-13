@@ -362,7 +362,7 @@ fn load_delete_task(app:&AppHandle,id:u64)->Result<DeleteTask,String>{
  serde_json::from_str(&json).map_err(|e|format!("解析删除任务失败：{e}"))
 }
 async fn task_sleep(ms:u64){tauri::async_runtime::spawn_blocking(move||std::thread::sleep(std::time::Duration::from_millis(ms))).await.ok();}
-async fn wait_delete_resume(c:&DeleteSearchControl)->bool{while c.task_paused.load(Ordering::Relaxed)&&!c.task_cancelled.load(Ordering::Relaxed){task_sleep(150).await;}!c.task_cancelled.load(Ordering::Relaxed)}
+async fn wait_delete_resume(c:&DeleteSearchControl)->bool{!c.task_cancelled.load(Ordering::Acquire)&&!c.task_paused.load(Ordering::Acquire)}
 fn numeric_id_to_bid(id:&str)->Option<String>{
  const A:&[u8]=b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";if id.is_empty()||!id.bytes().all(|b|b.is_ascii_digit()){return None;}
  let mut left=id;let mut out=Vec::new();while !left.is_empty(){let start=left.len().saturating_sub(7);let mut n=left[start..].parse::<u64>().ok()?;let mut chars=Vec::new();while n>0{chars.push(A[(n%62)as usize]as char);n/=62;}if chars.is_empty(){chars.push('0');}chars.reverse();let mut p:String=chars.into_iter().collect();if start>0{p=format!("{:0>4}",p);}out.insert(0,p);left=&left[..start];}Some(out.concat())
@@ -517,7 +517,10 @@ async fn delete_one(client: &reqwest::Client, url: &str, uid: &str, cookie: &str
 }
 
 #[tauri::command]
-pub fn set_delete_task_paused(paused:bool,control:State<'_,DeleteSearchControl>){control.task_paused.store(paused,Ordering::Relaxed);}
+pub async fn set_delete_task_paused(paused:bool,control:State<'_,DeleteSearchControl>){
+ control.task_paused.store(paused,Ordering::Release);
+ if paused { while control.task_running.load(Ordering::Acquire) { tokio::time::sleep(std::time::Duration::from_millis(20)).await; } }
+}
 #[tauri::command]
 pub fn set_delete_task_cancelled(cancelled:bool,control:State<'_,DeleteSearchControl>){control.task_cancelled.store(cancelled,Ordering::Relaxed);if cancelled{control.task_paused.store(false,Ordering::Relaxed);}}
 #[tauri::command]
@@ -539,7 +542,7 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  let config=client.get("https://m.weibo.cn/api/config").header(COOKIE,cookie.as_str()).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(ACCEPT,"application/json, text/plain, */*").send().await.map_err(|e|format!("验证微博会话失败：{e}"))?;
  if !config.status().is_success(){return Err(format!("验证微博会话失败，HTTP {}",config.status().as_u16()));}let json:Value=config.json().await.map_err(|e|format!("解析微博账号信息失败：{e}"))?;
  let uid=json.pointer("/data/uid").and_then(Value::as_u64).map(|v|v.to_string()).or_else(||json.pointer("/data/uid").and_then(Value::as_str).map(str::to_string)).filter(|v|!v.is_empty()&&v!="0").ok_or_else(||"无法识别当前微博 UID，未执行删除。".to_string())?;
- let retry=task.state=="失败";let successful:std::collections::HashSet<String>=task.results.iter().filter(|r|r.state=="已删除").map(|r|r.post_id.clone()).collect();
+ let retry=task.state=="失败"||task.state=="已暂停";let successful:std::collections::HashSet<String>=task.results.iter().filter(|r|r.state=="已删除").map(|r|r.post_id.clone()).collect();
  let mut claimed=std::collections::HashSet::new();
  {
    let db=db_connection(&app)?;
@@ -578,7 +581,7 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  let (state,detail)=match outcome{Ok(())=>("已删除".to_string(),"已收到可确认的删除成功页面".to_string()),Err(e)=>("失败".to_string(),e)};let fatal=detail.contains("HTTP 401")||detail.contains("HTTP 403")||detail.contains("风控");
  task.results.retain(|r|r.post_id!=id);task.results.push(DeletePostResult{post_id:id,state,detail});task.progress=((task.results.len()*100)/task.post_ids.len()).min(100)as u8;let ok=task.results.iter().filter(|r|r.state=="已删除").count();let failed=task.results.iter().filter(|r|r.state=="失败").count();task.detail=format!("已处理 {}/{} 条；成功 {} 条，失败 {} 条",task.results.len(),task.post_ids.len(),ok,failed);
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());if fatal{break;}task_sleep(crate::settings::request_delay_ms(&app)).await;}
- if control.task_cancelled.load(Ordering::Relaxed){task.state="失败".into();task.detail=format!("任务失败，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if task.results.iter().any(|r|r.state=="失败")||task.results.len()<task.post_ids.len(){task.state="失败".into();}else{task.state="已完成".into();}
+ if control.task_cancelled.load(Ordering::Relaxed){task.state="失败".into();task.detail=format!("任务已停止，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if control.task_paused.load(Ordering::Acquire){task.state="已暂停".into();task.detail=format!("已暂停，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if task.results.iter().any(|r|r.state=="失败")||task.results.len()<task.post_ids.len(){task.state="失败".into();}else{task.state="已完成".into();}
  save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());Ok(task)
 }
 
