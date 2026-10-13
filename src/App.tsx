@@ -737,7 +737,7 @@ function App() {
     } catch (reason) { notify(`暂停下载失败：${String(reason)}`); }
   };
   const resumeDownloadTask = async (task: Task) => {
-    if (!activeDownloadIds.current.has(task.id) && activeDownloadIds.current.size >= 1) {
+    if (executingDeleteTask !== null || (!activeDownloadIds.current.has(task.id) && activeDownloadIds.current.size >= 1)) {
       const waitingTask = { ...task, state: "排队中" as TaskState, detail: "等待下载并发名额" };
       setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
       try { await invoke("save_download_task", { task: waitingTask }); } catch { /* 保持排队状态 */ }
