@@ -123,6 +123,8 @@ function App() {
   const [appliedDownloadMediaType, setAppliedDownloadMediaType] = useState("all");
   const [downloadBusy, setDownloadBusy] = useState(false);
   const activeDownloadIds = useRef<Set<number>>(new Set());
+  const activeSlotWaiters = useRef<Array<() => void>>([]);
+  const pausedDeleteIds = useRef<Set<number>>(new Set());
   const pausedDownloadIds = useRef<Set<number>>(new Set());
   const tasksRef = useRef<Task[]>([]);
   tasksRef.current = tasks;
@@ -471,6 +473,11 @@ function App() {
     setDeleteActionTask(null);
     setExecutingDeleteTask(task.id);
     try {
+      if (activeDownloadIds.current.size > 0) {
+        setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "排队中", detail: "等待全局任务名额" } : item));
+        await new Promise<void>(resolve => activeSlotWaiters.current.push(resolve));
+      }
+      if (pausedDeleteIds.current.has(task.id)) return;
       const result = await invoke<PersistedDeleteTask>("execute_delete_task", { taskId: task.id });
       setTasks(current => [{ id: result.id, title: result.title, kind: "删除", state: result.state, progress: result.progress, detail: result.detail, createdAt: result.createdAt, postIds: result.postIds, dateFrom: result.dateFrom, dateTo: result.dateTo, keyword: result.keyword, postType: result.postType, results: result.results }, ...current.filter(item => item.id !== result.id)]);
       notify(result.state === "已完成" ? "删除任务执行完成。" : "删除任务结束：" + result.state);
@@ -652,6 +659,7 @@ function App() {
     } finally {
       activeDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
+      if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
       scheduleWaitingDownloadRef.current();
     }
   };
@@ -677,6 +685,7 @@ function App() {
     else notify("所选任务中没有可以开始的任务。");
   };
   const pauseDeleteTask = async (task: Task) => {
+    pausedDeleteIds.current.add(task.id);
     setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "暂停中", detail: "正在停止后台删除工作" } : item));
     try {
       await invoke("set_delete_task_paused", { paused: true });
@@ -684,8 +693,14 @@ function App() {
     } catch (reason) { notify(`暂停删除失败：${String(reason)}`); }
   };
   const resumeDeleteTask = async (task: Task) => {
+    pausedDeleteIds.current.delete(task.id);
     setExecutingDeleteTask(task.id);
     setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "执行中", detail: "正在恢复删除任务" } : item));
+    if (activeDownloadIds.current.size > 0) {
+      setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "排队中", detail: "等待全局任务名额" } : item));
+      await new Promise<void>(resolve => activeSlotWaiters.current.push(resolve));
+    }
+    if (pausedDeleteIds.current.has(task.id)) { setExecutingDeleteTask(null); return; }
     try {
       const result = await invoke<PersistedDeleteTask>("execute_delete_task", { taskId: task.id });
       setTasks(current => current.map(item => item.id === result.id ? { ...item, state: result.state, progress: result.progress, detail: result.detail, results: result.results } : item));
