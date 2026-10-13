@@ -146,7 +146,7 @@ pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: St
     requested_users.sort();
     requested_users.dedup();
     {
-        let mut statement = tx.prepare("SELECT detail FROM tasks WHERE kind='下载' AND state IN ('等待中','执行中','已暂停')")
+        let mut statement = tx.prepare("SELECT detail FROM tasks WHERE kind='下载' AND state IN ('未开始','排队中','执行中','已暂停')")
             .map_err(|e| format!("检查重复下载任务失败：{e}"))?;
         let rows = statement.query_map([], |row| row.get::<_, String>(0))
             .map_err(|e| format!("读取现有下载任务失败：{e}"))?;
@@ -169,7 +169,7 @@ pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: St
     }
     let task = DownloadTaskRecord {
         id: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 + 1_000_000_000_000,
-        title: format!("媒体下载（{} 个用户）", users.len()), state: "等待中".into(), progress: 0,
+        title: format!("媒体下载（{} 个用户）", users.len()), state: "未开始".into(), progress: 0,
         detail: "待启动".into(), created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), download_config: config, download_results: Vec::new(),
     };
     let json = serde_json::to_string(&task).map_err(|e| format!("序列化下载任务失败：{e}"))?;
