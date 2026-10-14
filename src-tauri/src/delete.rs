@@ -134,7 +134,7 @@ impl Drop for TaskExecutionGuard<'_> {
         }
         self.running.store(false, Ordering::Release);
         if let Some(notify) = self.stopped_notify {
-            notify.notify_waiters();
+            notify.notify_one();
         }
     }
 }
