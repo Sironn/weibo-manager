@@ -87,19 +87,19 @@ async fn wait_download_resume(control: &DownloadTaskControl, guard: &mut Downloa
     Ok(())
 }
 #[tauri::command]
-pub async fn set_download_paused(task_id: u64, paused: bool, control: State<'_, DownloadControl>) -> bool {
+pub async fn set_download_paused(task_id: u64, paused: bool, control: State<'_, DownloadControl>) -> Result<bool, String> {
     let task = task_control(&control, task_id);
     task.paused.store(paused, std::sync::atomic::Ordering::Release);
     if !paused {
         task.resume_notify.notify_one();
-        return task.running.load(std::sync::atomic::Ordering::Acquire);
+        return Ok(task.running.load(std::sync::atomic::Ordering::Acquire));
     }
     loop {
-        if task.paused_ack.load(std::sync::atomic::Ordering::Acquire) { return true; }
-        if !task.running.load(std::sync::atomic::Ordering::Acquire) { return false; }
+        if task.paused_ack.load(std::sync::atomic::Ordering::Acquire) { return Ok(true); }
+        if !task.running.load(std::sync::atomic::Ordering::Acquire) { return Ok(false); }
         let notified = task.pause_ack_notify.notified();
-        if task.paused_ack.load(std::sync::atomic::Ordering::Acquire) { return true; }
-        if !task.running.load(std::sync::atomic::Ordering::Acquire) { return false; }
+        if task.paused_ack.load(std::sync::atomic::Ordering::Acquire) { return Ok(true); }
+        if !task.running.load(std::sync::atomic::Ordering::Acquire) { return Ok(false); }
         notified.await;
     }
 }

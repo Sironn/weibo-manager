@@ -517,21 +517,19 @@ async fn delete_one(client: &reqwest::Client, url: &str, uid: &str, cookie: &str
 }
 
 #[tauri::command]
-pub async fn set_delete_task_paused(task_id:u64,paused:bool,app:AppHandle,control:State<'_,DeleteSearchControl>)->String{
+pub async fn set_delete_task_paused(task_id:u64,paused:bool,app:AppHandle,control:State<'_,DeleteSearchControl>)->Result<String,String>{
  control.task_paused.store(paused,Ordering::Release);
- if !paused { return "执行中".into(); }
- if paused {
-   while control.task_running.load(Ordering::Acquire) { tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
-   if let Ok(mut task)=load_delete_task(&app,task_id) {
-     if task.state!="已完成" && task.state!="失败" {
-       task.state="已暂停".into();
-       task.detail=format!("已暂停，已处理 {}/{} 条",task.results.len(),task.post_ids.len());
-       if save_delete_task(&app,&task).is_ok() { let _=app.emit("delete-task-updated",task.clone()); }
-     }
-     return task.state;
+ if !paused { return Ok("执行中".into()); }
+ while control.task_running.load(Ordering::Acquire) { tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
+ if let Ok(mut task)=load_delete_task(&app,task_id) {
+   if task.state!="已完成" && task.state!="失败" {
+     task.state="已暂停".into();
+     task.detail=format!("已暂停，已处理 {}/{} 条",task.results.len(),task.post_ids.len());
+     if save_delete_task(&app,&task).is_ok() { let _=app.emit("delete-task-updated",task.clone()); }
    }
+   return Ok(task.state);
  }
- "失败".into()
+ Ok("失败".into())
 }
 #[tauri::command]
 pub fn set_delete_task_cancelled(cancelled:bool,control:State<'_,DeleteSearchControl>){control.task_cancelled.store(cancelled,Ordering::Relaxed);if cancelled{control.task_paused.store(false,Ordering::Relaxed);}}
