@@ -147,9 +147,17 @@ fn task_db(app: &AppHandle) -> Result<Connection, String> {
 }
 
 #[tauri::command]
-pub fn open_download_directory(app: AppHandle, download_dir: String) -> Result<(), String> {
-    let path = resolve_download_root(&app, &download_dir)?;
-    if !path.is_dir() { return Err("下载目录不存在或不可访问。".into()); }
+pub fn open_download_directory(app: AppHandle, download_dir: String, folder_template: Option<String>, user_name: Option<String>) -> Result<(), String> {
+    let root = resolve_download_root(&app, &download_dir)?;
+    if !root.is_dir() { return Err(format!("下载根目录不存在或不可访问：{}", root.display())); }
+    // 单用户任务直接进入实际存放媒体文件的用户文件夹；多用户任务则打开根目录。
+    let path = match (folder_template.as_deref(), user_name.as_deref()) {
+        (Some(template), Some(name)) if !name.trim().is_empty() => {
+            let user_folder = root.join(replace_template(template, name, "", "", 0, ""));
+            if user_folder.is_dir() { user_folder } else { root.clone() }
+        }
+        _ => root.clone(),
+    };
     #[cfg(target_os = "windows")]
     std::process::Command::new("explorer").arg(&path).spawn()
         .map_err(|e| format!("无法打开下载目录：{e}"))?;
