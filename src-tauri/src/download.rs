@@ -439,7 +439,10 @@ fn apply_file_times(path: &Path, post_time: &DateTime<chrono::FixedOffset>) -> R
     #[cfg(target_os = "windows")]
     {
         let file_time: SystemTime = post_time.to_owned().into();
-        let file = fs::File::open(path)
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
             .map_err(|e| format!("打开文件以设置时间失败：{e}"))?;
         file.set_times(
             std::fs::FileTimes::new()
