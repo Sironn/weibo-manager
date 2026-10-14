@@ -113,8 +113,17 @@ pub fn cancel_download(task_id: u64, control: State<'_, DownloadControl>) {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DownloadUserDetail {
+    pub input: String,
+    pub uid: String,
+    pub screen_name: Option<String>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DownloadTaskConfig {
     pub users: Vec<String>,
+    #[serde(default)]
+    pub user_details: Vec<DownloadUserDetail>,
     pub download_dir: String,
     pub date_from: String,
     pub date_to: String,
@@ -147,17 +156,9 @@ fn task_db(app: &AppHandle) -> Result<Connection, String> {
 }
 
 #[tauri::command]
-pub fn open_download_directory(app: AppHandle, download_dir: String, folder_template: Option<String>, user_name: Option<String>) -> Result<(), String> {
-    let root = resolve_download_root(&app, &download_dir)?;
-    if !root.is_dir() { return Err(format!("下载根目录不存在或不可访问：{}", root.display())); }
-    // 单用户任务直接进入实际存放媒体文件的用户文件夹；多用户任务则打开根目录。
-    let path = match (folder_template.as_deref(), user_name.as_deref()) {
-        (Some(template), Some(name)) if !name.trim().is_empty() => {
-            let user_folder = root.join(replace_template(template, name, "", "", 0, ""));
-            if user_folder.is_dir() { user_folder } else { root.clone() }
-        }
-        _ => root.clone(),
-    };
+pub fn open_download_directory(app: AppHandle, download_dir: String) -> Result<(), String> {
+    let path = resolve_download_root(&app, &download_dir)?;
+    if !path.is_dir() { return Err(format!("下载根目录不存在或不可访问：{}", path.display())); }
     #[cfg(target_os = "windows")]
     std::process::Command::new("explorer").arg(&path).spawn()
         .map_err(|e| format!("无法打开下载目录：{e}"))?;
@@ -182,9 +183,9 @@ pub async fn select_download_directory(app: AppHandle) -> Result<Option<String>,
 }
 
 #[tauri::command]
-pub fn create_download_task(app: AppHandle, users: Vec<String>, title: String, download_dir: String, date_from: String, date_to: String, media_type: String, modify_file_time: bool, file_template: String, folder_template: String) -> Result<DownloadTaskRecord, String> {
+pub fn create_download_task(app: AppHandle, users: Vec<String>, title: String, download_dir: String, date_from: String, date_to: String, media_type: String, modify_file_time: bool, file_template: String, folder_template: String, user_details: Vec<DownloadUserDetail>) -> Result<DownloadTaskRecord, String> {
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
-    let config = DownloadTaskConfig { users: users.clone(), download_dir, date_from, date_to, media_type, modify_file_time, file_template, folder_template };
+    let config = DownloadTaskConfig { users: users.clone(), user_details, download_dir, date_from, date_to, media_type, modify_file_time, file_template, folder_template };
     let mut db = task_db(&app)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| format!("无法锁定下载任务记录：{e}"))?;
