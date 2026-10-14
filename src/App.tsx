@@ -70,6 +70,17 @@ function extractWeiboUid(input: string): string {
     return pathUid || (queryUid && /^\d+$/.test(queryUid) ? queryUid : "");
   } catch { return ""; }
 }
+function formatDateInput(value: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value.replace(/-/g, "/") : value;
+}
+function normalizeDateInput(value: string): string {
+  const match = value.trim().match(/^(\d{4})[/-](\d{1,2})[/-](\d{1,2})$/);
+  if (!match) return value;
+  const [, year, month, day] = match;
+  const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)));
+  if (date.getUTCFullYear() !== Number(year) || date.getUTCMonth() !== Number(month) - 1 || date.getUTCDate() !== Number(day)) return value;
+  return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
 function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [dark, setDark] = useState(false);
@@ -106,6 +117,7 @@ function App() {
   const [moreTask, setMoreTask] = useState<Task | null>(null);
   const [users, setUsers] = useState<string[]>([]);
   const [userLabels, setUserLabels] = useState<Record<string, string>>({});
+  const [taskUserLabels, setTaskUserLabels] = useState<Record<string, string>>({});
   const [newUser, setNewUser] = useState("");
   // 文件名与文件夹名模板分别保存；当前阶段只演示模板配置，不执行真实下载。
   const [filenameSettings, setFilenameSettings] = useState<FilenameSettings>(initialFilenameSettings);
@@ -117,7 +129,7 @@ function App() {
   const [downloadDateFrom, setDownloadDateFrom] = useState("");
   const [downloadDateTo, setDownloadDateTo] = useState("");
   const [downloadMediaType, setDownloadMediaType] = useState("all");
-  const [modifyDownloadFileTime, setModifyDownloadFileTime] = useState(false);
+  const [modifyDownloadFileTime, setModifyDownloadFileTime] = useState(true);
   const [appliedDownloadDateFrom, setAppliedDownloadDateFrom] = useState("");
   const [appliedDownloadDateTo, setAppliedDownloadDateTo] = useState("");
   const [appliedDownloadMediaType, setAppliedDownloadMediaType] = useState("all");
@@ -586,8 +598,19 @@ function App() {
       folderTemplate: filenameSettings.folderTemplate,
     };
     try {
+      const resolvedUsers = await Promise.all(config.users.map(async (user, index) => {
+        try {
+          const resolved = await invoke<{ uid: string; screenName: string | null }>("resolve_download_user", { userInput: user });
+          return { user, label: resolved.screenName?.trim() || (resolved.uid ? `UID ${resolved.uid}` : `用户${index + 1}`) };
+        } catch {
+          const uid = extractWeiboUid(user);
+          return { user, label: uid ? `UID ${uid}` : `用户${index + 1}` };
+        }
+      }));
+      const names = resolvedUsers.map(item => item.label);
+      const title = names.length === 1 ? names[0] : `${names.slice(0, 2).join("、")}...等${names.length}个用户`;
       const saved = await invoke<PersistedDownloadTask>("create_download_task", {
-        users: config.users, downloadDir: config.downloadDir, dateFrom: config.dateFrom, dateTo: config.dateTo,
+        users: config.users, title, downloadDir: config.downloadDir, dateFrom: config.dateFrom, dateTo: config.dateTo,
         mediaType: config.mediaType, modifyFileTime: config.modifyFileTime, fileTemplate: config.fileTemplate, folderTemplate: config.folderTemplate,
       });
       const task: Task = { ...saved, kind: "下载", downloadConfig: saved.downloadConfig };
@@ -819,7 +842,7 @@ function App() {
       {postsError && !postsError.includes("尚未登录微博") && !postsError.includes("Cookie 已失效") && !postsError.includes("Cookie 检测失败") && <div className="auth-error delete-generic-error" role="alert">{postsError}</div>}
       <div className="panel filter-panel">
         <div className="panel-title"><div><strong>筛选条件</strong><span>日期可留空以搜索全部时间，设置条件后点击搜索应用筛选条件。</span></div><button className="button ghost" onClick={() => { setKeyword(""); setDateFrom(""); setDateTo(""); setPostType("全部类型"); setAppliedKeyword(""); setAppliedDateFrom(""); setAppliedDateTo(""); setAppliedPostType("全部类型"); }}>重置条件</button></div>
-        <div className="filter-grid"><Field label="开始日期"><input type="date" lang="en-CA" placeholder="yyyy/mm/dd" aria-label="开始日期 yyyy/mm/dd" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field><Field label="结束日期"><input type="date" lang="en-CA" placeholder="yyyy/mm/dd" aria-label="结束日期 yyyy/mm/dd" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select value={postType} onChange={e => setPostType(e.target.value)}><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
+        <div className="filter-grid"><Field label="开始日期"><input type="text" inputMode="numeric" placeholder="yyyy/mm/dd" aria-label="开始日期 yyyy/mm/dd" value={formatDateInput(dateFrom)} onChange={e => setDateFrom(normalizeDateInput(e.target.value))} /></Field><Field label="结束日期"><input type="text" inputMode="numeric" placeholder="yyyy/mm/dd" aria-label="结束日期 yyyy/mm/dd" value={formatDateInput(dateTo)} onChange={e => setDateTo(normalizeDateInput(e.target.value))} /></Field><Field label="关键词"><div className="input-icon"><Search size={16}/><input placeholder="搜索微博正文" value={keyword} onChange={e => setKeyword(e.target.value)} /></div></Field><Field label="微博类型"><select value={postType} onChange={e => setPostType(e.target.value)}><option>全部类型</option><option>原创</option><option>转发</option></select></Field></div>
         <div className="filter-foot"><span>开始日期:{dateFrom || "不限"} 结束日期:{dateTo || "不限"} 关键字:{keyword.trim() || "不限"} 微博类型:{postType}</span><div className="account-actions"><button className="button primary" onClick={() => void searchDeletePosts()} disabled={postsLoading || cookieValidity !== "valid"}><Search size={15}/> {postsLoading ? "正在读取…" : "搜索微博"}</button></div></div>
       </div>
       <div className="panel delete-posts-panel">
@@ -838,7 +861,7 @@ function App() {
         <div className="panel-title"><div><strong>目标用户队列</strong><span>支持添加多个用户并排队，日期留空表示不限时间。</span></div><span className="tag blue">{users.length} 个用户</span></div>
         <div className="add-user-row"><div className="input-icon"><Users size={16}/><input placeholder="微博主页链接或用户标识" value={newUser} onChange={e => setNewUser(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && newUser.trim()) void addDownloadUser(); }} /></div><button className="button secondary" onClick={() => void addDownloadUser()} disabled={!newUser.trim()}><Plus size={15}/> 添加用户</button></div>
         <div className="user-list">{users.map((user, i) => <div className="user-row" key={user + i}><div className="avatar">{user.slice(0, 1).toUpperCase()}</div><div className="user-info"><strong>{userLabels[user] ? `${userLabels[user]} UID: ${extractWeiboUid(user) || "待识别"}` : `用户名 UID: ${extractWeiboUid(user) || "待识别"}`}</strong><span>待采集 · {extractWeiboUid(user) ? "UID 已识别" : "请确认输入的是 UID 或微博主页链接"}</span></div><span className="tag neutral">队列 {i + 1}</span><button className="icon-button" aria-label="移除用户" onClick={() => setUsers(u => u.filter((_, index) => index !== i))}><X size={16}/></button></div>)}</div>
-        <div className="download-form-grid"><Field className="field-date" label="开始日期"><input type="date" lang="en-CA" placeholder="yyyy/mm/dd" aria-label="开始日期 yyyy/mm/dd" value={downloadDateFrom} onChange={e => setDownloadDateFrom(e.target.value)}/></Field><Field className="field-date" label="结束日期"><input type="date" lang="en-CA" placeholder="yyyy/mm/dd" aria-label="结束日期 yyyy/mm/dd" value={downloadDateTo} onChange={e => setDownloadDateTo(e.target.value)}/></Field><Field className="field-media" label="媒体类型"><select value={downloadMediaType} onChange={e => setDownloadMediaType(e.target.value)}><option value="all">图片、视频、LivePhoto</option><option value="images">仅图片</option><option value="videos">仅视频</option><option value="livephoto">仅 LivePhoto</option></select></Field><Field className="field-path" label="下载目录"><div className="input-with-button"><input value={downloadPath} onChange={e => setDownloadPath(e.target.value)} title={downloadPath}/><button className="icon-button" onClick={() => void invoke<string | null>("select_download_directory").then(path => { if (path) setDownloadPath(path); }).catch(reason => notify(`选择下载目录失败：${String(reason)}`))} aria-label="选择下载目录" title="选择下载目录"><FolderOpen size={16}/></button></div></Field><div className="field-switch"><span>修改创建日期</span><label className="switch-control" aria-label="修改创建日期"><input type="checkbox" checked={modifyDownloadFileTime} onChange={e => setModifyDownloadFileTime(e.target.checked)}/><span className="switch-track"><span className="switch-thumb"/></span></label></div></div>
+        <div className="download-form-grid"><Field className="field-date" label="开始日期"><input type="text" inputMode="numeric" placeholder="yyyy/mm/dd" aria-label="开始日期 yyyy/mm/dd" value={formatDateInput(downloadDateFrom)} onChange={e => setDownloadDateFrom(normalizeDateInput(e.target.value))}/></Field><Field className="field-date" label="结束日期"><input type="text" inputMode="numeric" placeholder="yyyy/mm/dd" aria-label="结束日期 yyyy/mm/dd" value={formatDateInput(downloadDateTo)} onChange={e => setDownloadDateTo(normalizeDateInput(e.target.value))}/></Field><Field className="field-media" label="媒体类型"><select value={downloadMediaType} onChange={e => setDownloadMediaType(e.target.value)}><option value="all">图片、视频、LivePhoto</option><option value="images">仅图片</option><option value="videos">仅视频</option><option value="livephoto">仅 LivePhoto</option></select></Field><Field className="field-path" label="下载目录"><div className="input-with-button"><input value={downloadPath} onChange={e => setDownloadPath(e.target.value)} title={downloadPath}/><button className="icon-button" onClick={() => void invoke<string | null>("select_download_directory").then(path => { if (path) setDownloadPath(path); }).catch(reason => notify(`选择下载目录失败：${String(reason)}`))} aria-label="选择下载目录" title="选择下载目录"><FolderOpen size={16}/></button></div></Field><div className="field-switch"><span>修改创建日期</span><label className="switch-control" aria-label="修改创建日期"><input type="checkbox" checked={modifyDownloadFileTime} onChange={e => setModifyDownloadFileTime(e.target.checked)}/><span className="switch-track"><span className="switch-thumb"/></span></label></div></div>
         <div className="filter-foot download-filter-foot"><span>开始日期:{downloadDateFrom || "不限"} 结束日期:{downloadDateTo || "不限"} 媒体类型:{downloadMediaType === "all" ? "全部媒体" : downloadMediaType === "images" ? "仅图片" : downloadMediaType === "videos" ? "仅视频" : "仅 LivePhoto"}</span><div className="account-actions"><button className="button primary" onClick={() => void createDownloadTask()} disabled={!users.length}><Plus size={15}/> 创建下载任务</button></div></div>
       </div>
     </section>;
@@ -858,7 +881,7 @@ function App() {
           {task.kind === "删除" && (task.state === "未开始" || task.state === "失败") && <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "未开始" ? "执行删除" : "重新开始删除"} aria-label={task.state === "未开始" ? "执行删除" : "重新开始删除"} disabled={cookieValidity === "checking"} onClick={() => setDeleteActionTask(task)}>{task.state === "未开始" ? <Play size={16} fill="currentColor"/> : <RefreshCw size={16}/>}</button>}
           {task.kind === "下载" && task.downloadConfig && <>{task.state === "执行中" || task.state === "排队中" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停任务" aria-label="暂停任务" onClick={() => void pauseDownloadTask(task)}><Pause size={16} fill="currentColor" strokeWidth={2.5}/></button> : task.state === "暂停中" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="正在暂停" aria-label="正在暂停" disabled><Pause size={16} fill="currentColor"/></button> : task.state === "已暂停" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="继续下载" aria-label="继续下载" onClick={() => void resumeDownloadTask(task)}><Play size={16} fill="currentColor"/></button> : task.state === "已完成" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="打开下载目录" aria-label="打开下载目录" onClick={() => void invoke("open_download_directory", { downloadDir: task.downloadConfig!.downloadDir }).catch(reason => notify(`打开下载目录失败：${String(reason)}`))}><FolderOpen size={16}/></button> : <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "失败" ? "重新开始下载" : "开始下载"} aria-label={task.state === "失败" ? "重新开始下载" : "开始下载"} disabled={cookieValidity === "checking"} onClick={() => void executeDownloadTask(task)}>{task.state === "失败" ? <RefreshCw size={16}/> : <Play size={16} fill="currentColor"/>}</button>}</>}
         </div></td>
-        <td><button className="icon-button task-action-icon" aria-label="更多任务信息" title="更多" onClick={() => setMoreTask(task)}><MoreHorizontal size={17}/></button></td>
+        <td><button className="icon-button task-action-icon" aria-label="更多任务信息" title="更多" onClick={() => { setMoreTask(task); if (task.downloadConfig) void Promise.all(task.downloadConfig.users.map(async user => { try { const resolved = await invoke<{ uid: string; screenName: string | null }>("resolve_download_user", { userInput: user }); const uid = resolved.uid || extractWeiboUid(user); setTaskUserLabels(current => ({ ...current, [user]: resolved.screenName?.trim() || (uid ? `UID ${uid}` : "昵称未识别") })); } catch { const uid = extractWeiboUid(user); setTaskUserLabels(current => ({ ...current, [user]: uid ? `UID ${uid}` : "昵称未识别" })); } })); }}><MoreHorizontal size={17}/></button></td>
       </tr>)}</tbody></table>{tasks.length === 0 && <EmptyState title="暂无任务" description="创建删除任务后会显示在这里；执行前会再次要求确认。" />}</div></div>      {moreTask && <div className="modal-backdrop" role="presentation"><div className="modal more-task-modal" role="dialog" aria-modal="true" aria-labelledby="more-task-title"><button className="icon-button more-task-close" aria-label="关闭任务详情" title="关闭" onClick={() => setMoreTask(null)}><X size={17}/></button><div className="modal-icon" style={{background:"#eef2ff",color:"#4f67ce"}}><MoreHorizontal/></div><h3 id="more-task-title">{moreTask.title}</h3>
         <div style={{display:"grid",gap:10,fontSize:12}}>
           {moreTask.postIds && <div><strong>任务总条数：</strong>{moreTask.postIds.length} 条</div>}
@@ -867,7 +890,7 @@ function App() {
           {(moreTask.dateFrom || moreTask.dateTo || moreTask.keyword?.trim() || (moreTask.postType && moreTask.postType !== "全部类型")) && <div><strong>筛选条件：</strong><div style={{display:"grid",gap:5,marginTop:6}}>{(moreTask.dateFrom || moreTask.dateTo) && <div>日期：{moreTask.dateFrom || "不限"} 至 {moreTask.dateTo || "不限"}</div>}{moreTask.postType && moreTask.postType !== "全部类型" && <div>微博类型：{moreTask.postType}</div>}{moreTask.keyword?.trim() && <div>关键词：{moreTask.keyword}</div>}</div></div>}
           {moreTask.detail.trim() && moreTask.state !== "未开始" && <div><strong>任务信息：</strong>{moreTask.detail}</div>}
           {moreTask.results && moreTask.results.length > 0 && <div><strong>逐条结果：</strong><div style={{display:"grid",gap:6,marginTop:6}}>{moreTask.results.map(item => <div key={item.postId}>{item.postId} {item.state} {item.detail}</div>)}</div></div>}
-          {moreTask.downloadConfig && <div><strong>目标用户：</strong><div style={{display:"grid",gap:5,marginTop:6}}>{moreTask.downloadConfig.users.map((user, index) => { const uid = extractWeiboUid(user); const url = /^https?:\/\//i.test(user) ? user : uid ? `https://weibo.com/u/${uid}` : user; return <div key={user + index}>{index + 1}. {uid || user} · {url}</div>; })}</div></div>}
+          {moreTask.downloadConfig && <div><strong>目标用户：</strong><div style={{display:"grid",gap:5,marginTop:6}}>{moreTask.downloadConfig.users.map((user, index) => { const uid = extractWeiboUid(user); const url = uid ? `https://weibo.com/u/${uid}` : user; const label = taskUserLabels[user] || (uid ? `UID ${uid}` : "昵称未识别"); return <div key={user + index}>{label}: {url}</div>; })}</div></div>}
           {moreTask.downloadConfig && <div><strong>筛选条件：</strong><div style={{display:"grid",gap:5,marginTop:6}}><div>开始日期：{moreTask.downloadConfig.dateFrom || "不限"}</div><div>结束日期：{moreTask.downloadConfig.dateTo || "不限"}</div><div>媒体类型：{moreTask.downloadConfig.mediaType === "all" ? "全部媒体" : moreTask.downloadConfig.mediaType === "images" ? "仅图片" : moreTask.downloadConfig.mediaType === "videos" ? "仅视频" : "仅 LivePhoto"}</div></div></div>}
           {moreTask.downloadConfig && <div><strong>下载设置：</strong><div style={{display:"grid",gap:5,marginTop:6}}><div>下载目录：{moreTask.downloadConfig.downloadDir}</div><div>修改创建日期：{moreTask.downloadConfig.modifyFileTime ? "开启" : "关闭"}</div><div>文件夹模板：{moreTask.downloadConfig.folderTemplate}</div><div>文件名模板：{moreTask.downloadConfig.fileTemplate}</div></div></div>}
           {moreTask.downloadResults && moreTask.downloadResults.length > 0 && <div><strong>逐用户结果：</strong><div style={{display:"grid",gap:8,marginTop:6}}>{moreTask.downloadResults.map((item, index) => <div key={item.user + index}><div>{item.user}</div><div>下载 {item.downloaded + item.skipped + item.failed}，成功 {item.downloaded}，跳过 {item.skipped}，失败 {item.failed}</div>{item.detail.trim() && <div>{item.detail}</div>}</div>)}</div></div>}
