@@ -186,34 +186,8 @@ pub fn create_download_task(app: AppHandle, users: Vec<String>, title: String, d
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let config = DownloadTaskConfig { users: users.clone(), download_dir, date_from, date_to, media_type, modify_file_time, file_template, folder_template };
     let mut db = task_db(&app)?;
-    // 与删除任务一样，在同一事务中检查并创建，避免连续点击时重复插入。
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| format!("无法锁定下载任务记录：{e}"))?;
-    let mut requested_users = config.users.iter().map(|user| user.trim().to_lowercase()).filter(|user| !user.is_empty()).collect::<Vec<_>>();
-    requested_users.sort();
-    requested_users.dedup();
-    {
-        let mut statement = tx.prepare("SELECT detail FROM tasks WHERE kind='下载' AND state IN ('未开始','排队中','执行中','已暂停')")
-            .map_err(|e| format!("检查重复下载任务失败：{e}"))?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| format!("读取现有下载任务失败：{e}"))?;
-        for row in rows {
-            let serialized = row.map_err(|e| format!("读取现有下载任务失败：{e}"))?;
-            if let Ok(existing) = serde_json::from_str::<DownloadTaskRecord>(&serialized) {
-                let mut existing_users = existing.download_config.users.iter().map(|user| user.trim().to_lowercase()).filter(|user| !user.is_empty()).collect::<Vec<_>>();
-                existing_users.sort();
-                existing_users.dedup();
-                let same_scope = requested_users == existing_users
-                    && config.download_dir.trim() == existing.download_config.download_dir.trim()
-                    && config.date_from == existing.download_config.date_from
-                    && config.date_to == existing.download_config.date_to
-                    && config.media_type == existing.download_config.media_type;
-                if same_scope {
-                    return Err("相同目标用户、下载目录和筛选条件的下载任务已存在，请前往任务中心继续处理原任务。".into());
-                }
-            }
-        }
-    }
     let task = DownloadTaskRecord {
         id: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 + 1_000_000_000_000,
         title: title.trim().to_string(), state: "未开始".into(), progress: 0,
