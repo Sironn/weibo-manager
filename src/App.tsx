@@ -81,6 +81,13 @@ function normalizeDateInput(value: string): string {
   if (date.getUTCFullYear() !== Number(year) || date.getUTCMonth() !== Number(month) - 1 || date.getUTCDate() !== Number(day)) return value;
   return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
+function isValidDateFilter(value: string): boolean {
+  if (!value) return true;
+  if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
 function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const [dark, setDark] = useState(false);
@@ -331,6 +338,7 @@ function App() {
   };
   const searchDeletePosts = async () => {
     if (postsLoading || cookieValidity !== "valid") return;
+    if (!isValidDateFilter(dateFrom) || !isValidDateFilter(dateTo)) { notify("请输入有效日期，格式为 yyyy/mm/dd。"); return; }
     const now = new Date();
     const effectiveEndDate = dateTo || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     setAppliedDateFrom(dateFrom);
@@ -580,6 +588,7 @@ function App() {
     if (!valid) { notify("请先登录微博并确认 Cookie 可用。"); return; }
     const validUsers = users.map(user => user.trim()).filter(Boolean);
     if (!validUsers.length) return;
+    if (!isValidDateFilter(downloadDateFrom) || !isValidDateFilter(downloadDateTo)) { notify("请输入有效日期，格式为 yyyy/mm/dd。"); return; }
     if (downloadDateFrom && downloadDateTo && downloadDateFrom > downloadDateTo) {
       notify("开始日期不能晚于结束日期。");
       return;
