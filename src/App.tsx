@@ -123,6 +123,9 @@ function App() {
   const [appliedDownloadMediaType, setAppliedDownloadMediaType] = useState("all");
   const [downloadBusy, setDownloadBusy] = useState(false);
   const activeDownloadIds = useRef<Set<number>>(new Set());
+  const activeDeleteTaskId = useRef<number | null>(null);
+  const queuedDeleteTaskIds = useRef<number[]>([]);
+  const scheduleWaitingDeleteRef = useRef<() => void>(() => {});
   const activeSlotWaiters = useRef<Array<() => void>>([]);
   const suspendedDownloadIds = useRef<Set<number>>(new Set());
   const downloadWorkerIds = useRef<Set<number>>(new Set());
@@ -468,23 +471,19 @@ function App() {
       setRequestMaxDelay(String(config.maxMs));
     }).catch(reason => notify(`读取请求间隔设置失败：${String(reason)}`));
   }, []);
-  const confirmDeleteTask = async () => {
-    const task = deleteActionTask;
-    if (!task) return;
-    setDeleteActionTask(null);
-    setExecutingDeleteTask(task.id);
+  const runDeleteTask = async (task: Task) => {
     try {
-      if (activeDownloadIds.current.size > 0) {
-        setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "排队中", detail: "等待全局任务名额" } : item));
-        await new Promise<void>(resolve => activeSlotWaiters.current.push(resolve));
-      }
-      if (pausedDeleteIds.current.has(task.id)) return;
       const result = await invoke<PersistedDeleteTask>("execute_delete_task", { taskId: task.id });
-      setTasks(current => [{ id: result.id, title: result.title, kind: "删除", state: result.state, progress: result.progress, detail: result.detail, createdAt: result.createdAt, postIds: result.postIds, dateFrom: result.dateFrom, dateTo: result.dateTo, keyword: result.keyword, postType: result.postType, results: result.results }, ...current.filter(item => item.id !== result.id)]);
+      setTasks(current => current.map(item => item.id === result.id ? {
+        ...item, state: result.state, progress: result.progress, detail: result.detail, results: result.results,
+      } : item));
       notify(result.state === "已完成" ? "删除任务执行完成。" : "删除任务结束：" + result.state);
     } catch (reason) {
-      notify("执行删除任务失败：" + String(reason));
+      const detail = String(reason);
+      setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "失败", detail } : item));
+      notify("执行删除任务失败：" + detail);
     } finally {
+      activeDeleteTaskId.current = null;
       setExecutingDeleteTask(null);
       const nextId = pendingDeleteStartIds[0];
       if (nextId !== undefined) {
@@ -492,7 +491,20 @@ function App() {
         const nextTask = tasksRef.current.find(item => item.id === nextId && item.kind === "删除");
         if (nextTask) setDeleteActionTask(nextTask);
       }
+      scheduleWaitingDeleteRef.current();
     }
+  };
+  const confirmDeleteTask = async () => {
+    const task = deleteActionTask;
+    if (!task) return;
+    setDeleteActionTask(null);
+    if (activeDeleteTaskId.current !== task.id && !queuedDeleteTaskIds.current.includes(task.id)) {
+      queuedDeleteTaskIds.current.push(task.id);
+    }
+    setTasks(current => current.map(item => item.id === task.id
+      ? { ...item, state: "排队中", detail: "等待全局任务名额" }
+      : item));
+    scheduleWaitingDeleteRef.current();
   };
   const removeSelectedTasks = async () => {
     const ids = selectedTaskIds.filter(id => selectableTaskIds.includes(id));
@@ -591,7 +603,7 @@ function App() {
   const executeDownloadTask = async (task: Task) => {
     if (task.kind !== "下载" || !task.downloadConfig || activeDownloadIds.current.has(task.id)) return;
     const limit = 1;
-    if (executingDeleteTask !== null || activeDownloadIds.current.size >= limit) {
+    if (activeDeleteTaskId.current !== null || queuedDeleteTaskIds.current.length > 0 || activeDownloadIds.current.size >= limit) {
       const waitingTask = { ...task, state: "排队中" as TaskState, detail: "等待下载并发名额" };
       setTasks(current => current.map(item => item.id === task.id ? waitingTask : item));
       try { await invoke("save_download_task", { task: waitingTask }); } catch (reason) { log("error", "download", `保存等待任务状态失败：${String(reason)}`); }
@@ -668,11 +680,35 @@ function App() {
       pausedDownloadIds.current.delete(task.id);
       setDownloadBusy(activeDownloadIds.current.size > 0);
       if (activeDownloadIds.current.size === 0) activeSlotWaiters.current.splice(0).forEach(resolve => resolve());
-      scheduleWaitingDownloadRef.current();
+      if (queuedDeleteTaskIds.current.length > 0) scheduleWaitingDeleteRef.current();
+      else scheduleWaitingDownloadRef.current();
     }
   };
+  scheduleWaitingDeleteRef.current = () => {
+    if (activeDeleteTaskId.current !== null || activeDownloadIds.current.size > 0) return;
+    const nextId = queuedDeleteTaskIds.current.shift();
+    if (nextId !== undefined) {
+      const nextTask = tasksRef.current.find(item => item.id === nextId && item.kind === "删除");
+      if (!nextTask || pausedDeleteIds.current.has(nextId) || nextTask.state === "已完成") {
+        scheduleWaitingDeleteRef.current();
+        return;
+      }
+      activeDeleteTaskId.current = nextId;
+      setExecutingDeleteTask(nextId);
+      setTasks(current => current.map(item => item.id === nextId
+        ? { ...item, state: "执行中", detail: "正在启动删除任务" }
+        : item));
+      void runDeleteTask(nextTask);
+      return;
+    }
+    scheduleWaitingDownloadRef.current();
+  };
   scheduleWaitingDownloadRef.current = () => {
-    if (executingDeleteTask !== null) return;
+    if (activeDeleteTaskId.current !== null) return;
+    if (queuedDeleteTaskIds.current.length > 0) {
+      scheduleWaitingDeleteRef.current();
+      return;
+    }
     const limit = 1;
     while (activeDownloadIds.current.size < limit) {
       const next = tasksRef.current.find(item => item.kind === "下载" && item.state === "排队中" && item.downloadConfig && !activeDownloadIds.current.has(item.id));
@@ -693,6 +729,14 @@ function App() {
     else notify("所选任务中没有可以开始的任务。");
   };
   const pauseDeleteTask = async (task: Task) => {
+    if (activeDeleteTaskId.current !== task.id && task.state === "排队中") {
+      queuedDeleteTaskIds.current = queuedDeleteTaskIds.current.filter(id => id !== task.id);
+      pausedDeleteIds.current.add(task.id);
+      setTasks(current => current.map(item => item.id === task.id
+        ? { ...item, state: "已暂停", detail: "已暂停排队任务，点击继续后重新排队" }
+        : item));
+      return;
+    }
     pausedDeleteIds.current.add(task.id);
     setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "暂停中", detail: "正在停止后台删除工作" } : item));
     try {
@@ -703,18 +747,13 @@ function App() {
   };
   const resumeDeleteTask = async (task: Task) => {
     pausedDeleteIds.current.delete(task.id);
-    setExecutingDeleteTask(task.id);
-    setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "执行中", detail: "正在恢复删除任务" } : item));
-    if (activeDownloadIds.current.size > 0) {
-      setTasks(current => current.map(item => item.id === task.id ? { ...item, state: "排队中", detail: "等待全局任务名额" } : item));
-      await new Promise<void>(resolve => activeSlotWaiters.current.push(resolve));
+    if (activeDeleteTaskId.current !== task.id && !queuedDeleteTaskIds.current.includes(task.id)) {
+      queuedDeleteTaskIds.current.push(task.id);
     }
-    if (pausedDeleteIds.current.has(task.id)) { setExecutingDeleteTask(null); return; }
-    try {
-      const result = await invoke<PersistedDeleteTask>("execute_delete_task", { taskId: task.id });
-      setTasks(current => current.map(item => item.id === result.id ? { ...item, state: result.state, progress: result.progress, detail: result.detail, results: result.results } : item));
-    } catch (reason) { notify(`恢复删除失败：${String(reason)}`); }
-    finally { setExecutingDeleteTask(null); }
+    setTasks(current => current.map(item => item.id === task.id
+      ? { ...item, state: "排队中", detail: "等待全局任务名额" }
+      : item));
+    scheduleWaitingDeleteRef.current();
   };
   const pauseDownloadTask = async (task: Task) => {
     const wasWorkerStarted = downloadWorkerIds.current.has(task.id);
@@ -815,7 +854,7 @@ function App() {
           {task.kind === "删除" && task.state === "排队中" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停任务" aria-label="暂停任务" onClick={() => void pauseDeleteTask(task)}><Pause size={16} fill="currentColor"/></button>}
           {task.kind === "删除" && task.state === "已暂停" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="继续删除" aria-label="继续删除" onClick={() => void resumeDeleteTask(task)}><Play size={16} fill="currentColor"/></button>}
           {task.kind === "删除" && task.state === "已完成" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="已完成" aria-label="已完成" disabled><Check size={16}/></button>}
-          {task.kind === "删除" && (task.state === "未开始" || task.state === "失败") && <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "未开始" ? "执行删除" : "重新开始删除"} aria-label={task.state === "未开始" ? "执行删除" : "重新开始删除"} disabled={executingDeleteTask !== null || cookieValidity === "checking"} onClick={() => setDeleteActionTask(task)}>{task.state === "未开始" ? <Play size={16} fill="currentColor"/> : <RefreshCw size={16}/>}</button>}
+          {task.kind === "删除" && (task.state === "未开始" || task.state === "失败") && <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "未开始" ? "执行删除" : "重新开始删除"} aria-label={task.state === "未开始" ? "执行删除" : "重新开始删除"} disabled={cookieValidity === "checking"} onClick={() => setDeleteActionTask(task)}>{task.state === "未开始" ? <Play size={16} fill="currentColor"/> : <RefreshCw size={16}/>}</button>}
           {task.kind === "下载" && task.downloadConfig && <>{task.state === "执行中" || task.state === "排队中" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停任务" aria-label="暂停任务" onClick={() => void pauseDownloadTask(task)}><Pause size={16} fill="currentColor" strokeWidth={2.5}/></button> : task.state === "暂停中" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="正在暂停" aria-label="正在暂停" disabled><Pause size={16} fill="currentColor"/></button> : task.state === "已暂停" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="继续下载" aria-label="继续下载" onClick={() => void resumeDownloadTask(task)}><Play size={16} fill="currentColor"/></button> : task.state === "已完成" ? <button className="icon-button task-action-icon icon-tooltip" data-tooltip="打开下载目录" aria-label="打开下载目录" onClick={() => void invoke("open_download_directory", { downloadDir: task.downloadConfig!.downloadDir }).catch(reason => notify(`打开下载目录失败：${String(reason)}`))}><FolderOpen size={16}/></button> : <button className="icon-button task-action-icon icon-tooltip" data-tooltip={task.state === "失败" ? "重新开始下载" : "开始下载"} aria-label={task.state === "失败" ? "重新开始下载" : "开始下载"} disabled={cookieValidity === "checking"} onClick={() => void executeDownloadTask(task)}>{task.state === "失败" ? <RefreshCw size={16}/> : <Play size={16} fill="currentColor"/>}</button>}</>}
         </div></td>
         <td><button className="icon-button task-action-icon" aria-label="更多任务信息" title="更多" onClick={() => setMoreTask(task)}><MoreHorizontal size={17}/></button></td>

@@ -118,12 +118,14 @@ pub struct DeleteSearchControl {
     task_cancelled: AtomicBool,
     task_running: AtomicBool,
     active_task_id: std::sync::atomic::AtomicU64,
+    task_stopped_notify: tokio::sync::Notify,
     cookie_removal: AtomicBool,
 }
 
 struct TaskExecutionGuard<'a> {
     running: &'a AtomicBool,
     active_task_id: Option<&'a std::sync::atomic::AtomicU64>,
+    stopped_notify: Option<&'a tokio::sync::Notify>,
 }
 impl Drop for TaskExecutionGuard<'_> {
     fn drop(&mut self) {
@@ -131,6 +133,9 @@ impl Drop for TaskExecutionGuard<'_> {
             task_id.store(0, Ordering::Release);
         }
         self.running.store(false, Ordering::Release);
+        if let Some(notify) = self.stopped_notify {
+            notify.notify_waiters();
+        }
     }
 }
 
@@ -518,18 +523,39 @@ async fn delete_one(client: &reqwest::Client, url: &str, uid: &str, cookie: &str
 
 #[tauri::command]
 pub async fn set_delete_task_paused(task_id:u64,paused:bool,app:AppHandle,control:State<'_,DeleteSearchControl>)->Result<String,String>{
- control.task_paused.store(paused,Ordering::Release);
- if !paused { return Ok("执行中".into()); }
- while control.task_running.load(Ordering::Acquire) { tokio::time::sleep(std::time::Duration::from_millis(20)).await; }
- if let Ok(mut task)=load_delete_task(&app,task_id) {
-   if task.state!="已完成" && task.state!="失败" {
-     task.state="已暂停".into();
-     task.detail=format!("已暂停，已处理 {}/{} 条",task.results.len(),task.post_ids.len());
-     if save_delete_task(&app,&task).is_ok() { let _=app.emit("delete-task-updated",task.clone()); }
+ let active_task_id = control.active_task_id.load(Ordering::Acquire);
+ if active_task_id != task_id {
+   if !paused {
+     return Ok(load_delete_task(&app, task_id)?.state);
+   }
+   let mut task = load_delete_task(&app, task_id)?;
+   if task.state != "已完成" && task.state != "失败" {
+     task.state = "已暂停".into();
+     task.detail = format!("已暂停，已处理 {}/{} 条", task.results.len(), task.post_ids.len());
+     save_delete_task(&app, &task)?;
+     let _ = app.emit("delete-task-updated", task.clone());
    }
    return Ok(task.state);
  }
- Ok("失败".into())
+ control.task_paused.store(paused, Ordering::Release);
+ if !paused { return Ok("执行中".into()); }
+ while control.task_running.load(Ordering::Acquire)
+   && control.active_task_id.load(Ordering::Acquire) == task_id {
+   let stopped = control.task_stopped_notify.notified();
+   if !control.task_running.load(Ordering::Acquire)
+     || control.active_task_id.load(Ordering::Acquire) != task_id {
+     break;
+   }
+   stopped.await;
+ }
+ let mut task = load_delete_task(&app, task_id)?;
+ if task.state != "已完成" && task.state != "失败" {
+   task.state = "已暂停".into();
+   task.detail = format!("已暂停，已处理 {}/{} 条", task.results.len(), task.post_ids.len());
+   save_delete_task(&app, &task)?;
+   let _ = app.emit("delete-task-updated", task.clone());
+ }
+ Ok(task.state)
 }
 #[tauri::command]
 pub fn set_delete_task_cancelled(cancelled:bool,control:State<'_,DeleteSearchControl>){control.task_cancelled.store(cancelled,Ordering::Relaxed);if cancelled{control.task_paused.store(false,Ordering::Relaxed);}}
@@ -542,7 +568,11 @@ pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,Sessio
  control.task_cancelled.store(false,Ordering::Release);
  control.task_paused.store(false,Ordering::Release);
  control.active_task_id.store(task_id, Ordering::Release);
- let _execution_guard = TaskExecutionGuard { running: &control.task_running, active_task_id: Some(&control.active_task_id) };
+ let _execution_guard = TaskExecutionGuard {
+     running: &control.task_running,
+     active_task_id: Some(&control.active_task_id),
+     stopped_notify: Some(&control.task_stopped_notify),
+ };
  let _execution_permit = execution_gate.acquire().await?;
  if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
  if control.task_cancelled.load(Ordering::Acquire) { return Err("删除任务已停止。".into()); }
@@ -659,7 +689,11 @@ pub fn remove_delete_tasks(
     if control.task_running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
         return Err("有删除任务正在执行，请稍后重试删除。".into());
     }
-    let _execution_guard = TaskExecutionGuard { running: &control.task_running, active_task_id: None };
+    let _execution_guard = TaskExecutionGuard {
+        running: &control.task_running,
+        active_task_id: None,
+        stopped_notify: Some(&control.task_stopped_notify),
+    };
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| format!("无法锁定任务数据库：{e}"))?;
     let mut unique_ids = std::collections::HashSet::new();
