@@ -174,7 +174,7 @@ pub async fn select_download_directory(app: AppHandle) -> Result<Option<String>,
 }
 
 #[tauri::command]
-pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: String, date_from: String, date_to: String, media_type: String, modify_file_time: bool, file_template: String, folder_template: String) -> Result<DownloadTaskRecord, String> {
+pub fn create_download_task(app: AppHandle, users: Vec<String>, title: String, download_dir: String, date_from: String, date_to: String, media_type: String, modify_file_time: bool, file_template: String, folder_template: String) -> Result<DownloadTaskRecord, String> {
     if users.is_empty() { return Err("请先添加至少一个目标用户。".into()); }
     let config = DownloadTaskConfig { users: users.clone(), download_dir, date_from, date_to, media_type, modify_file_time, file_template, folder_template };
     let mut db = task_db(&app)?;
@@ -208,7 +208,7 @@ pub fn create_download_task(app: AppHandle, users: Vec<String>, download_dir: St
     }
     let task = DownloadTaskRecord {
         id: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64 + 1_000_000_000_000,
-        title: format!("媒体下载（{} 个用户）", users.len()), state: "未开始".into(), progress: 0,
+        title: title.trim().to_string(), state: "未开始".into(), progress: 0,
         detail: "待启动".into(), created_at: chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(), download_config: config, download_results: Vec::new(),
     };
     let json = serde_json::to_string(&task).map_err(|e| format!("序列化下载任务失败：{e}"))?;
