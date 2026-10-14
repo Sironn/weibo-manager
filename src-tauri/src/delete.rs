@@ -316,7 +316,7 @@ pub fn create_delete_task(
     }
     let mut claimed = std::collections::HashSet::new();
     {
-        let mut statement = tx.prepare("SELECT state, detail FROM tasks WHERE kind='删除' AND state IN ('未开始','执行中','失败')")
+        let mut statement = tx.prepare("SELECT state, detail FROM tasks WHERE kind='删除' AND state IN ('未开始','排队中','执行中','暂停中','已暂停','失败')")
             .map_err(|e| format!("检查重复删除任务失败：{e}"))?;
         let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
             .map_err(|e| format!("读取现有删除任务失败：{e}"))?;
@@ -613,7 +613,7 @@ let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return 
  let mut claimed=std::collections::HashSet::new();
  {
    let db=db_connection(&app)?;
-   let mut statement=db.prepare("SELECT id, detail FROM tasks WHERE kind='删除' AND id<>?1 AND state IN ('未开始','执行中','失败')")
+   let mut statement=db.prepare("SELECT id, detail FROM tasks WHERE kind='删除' AND id<>?1 AND state IN ('未开始','排队中','执行中','暂停中','已暂停','失败')")
      .map_err(|e|format!("执行前检查重复微博失败：{e}"))?;
    let rows=statement.query_map(params![task.id.to_string()],|row|Ok(row.get::<_,String>(1)?))
      .map_err(|e|format!("读取其他删除任务失败：{e}"))?;
