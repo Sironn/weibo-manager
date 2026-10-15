@@ -41,8 +41,6 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .brand-mark { background: #fff; box-shadow: none; border: 1px solid #f0f1f3; overflow: hidden; }
 .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
 
-/* 提示文字移除后，恢复目标用户队列面板底部留白。 */
-.download-user-panel { padding-bottom: 18px; }
 
 
 /* 登录阶段：已连接账号资料与认证错误状态。 */
@@ -90,12 +88,10 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
   .request-range { flex-wrap: wrap; }
 }
 
-.task-list-heading{flex-shrink:0;align-items:center}
+.task-list-heading { flex-shrink: 0; align-items: center; justify-content: space-between; }
 .task-list-heading .small{margin:0;display:flex;align-items:center;align-self:center}
 .task-list-panel .button{display:inline-flex;align-items:center;justify-content:center;line-height:1.25}
 .task-list-panel .account-actions{align-items:center}
-.task-list-scroll{flex:1;min-height:0;overflow:auto;padding-bottom:12px}
-.task-list-scroll thead th{position:sticky;top:0;z-index:2}
 .log-toggle{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11px;white-space:nowrap}.log-toggle input{accent-color:#526bd7;width:15px;height:15px;margin:0}
 
 /* 任务中心：缩小行高，避免为详情文本预留多余空间。 */
@@ -109,7 +105,6 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .task-center-content{display:flex;flex-direction:column;overflow:hidden}
 .task-center-content>.page-stack{flex:1;min-height:0}
 .task-center-content>.page-stack>.task-list-panel{flex:1;min-height:0;max-height:none}
-.task-list-panel{display:flex;flex-direction:column;min-height:0;min-width:0}
 
 .auth-success{margin:14px 20px 0;padding:10px 12px;border-radius:6px;background:#e8f8ef;color:#2d9666;font-size:11px;line-height:1.6}
 
@@ -123,9 +118,8 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .cookie-warning-banner .button { flex-shrink:0; }
 .continue-reading-button { font:inherit; font-size:11px; font-weight:600; line-height:1.2; padding:9px 13px; min-height:0; }
 
-.cookie-validity-message { margin: 8px 20px 0; padding: 8px 12px; border-radius: 6px; font-size: 11px; }
+.cookie-validity-message { display: block; width: calc(100% - 40px); margin: 8px 20px 0; padding: 8px 12px; border-radius: 6px; font-size: 11px; }
 .content.content-centered > .page-stack, .content.content-centered > .page-stack > .page-stack { min-width:0; }
-.cookie-validity-message { width:calc(100% - 40px); }
 .delete-generic-error { margin: 0 0 14px; }
 
 
@@ -133,7 +127,6 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .connected-account { flex-wrap:wrap; }
 .connected-account .cookie-actions { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:8px; margin-left:auto; }
 .cookie-actions .button { margin:0; }
-.cookie-validity-message { display:block; }
 
 
 /* 警告出现时保持待处理微博表格自身的尺寸和滚动区域稳定。 */
@@ -152,7 +145,7 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 
 /* 图标按钮悬停时显示轻量功能提示。 */
 .icon-tooltip { position: relative; }
-.icon-tooltip::after { content: attr(data-tooltip); position: absolute; z-index: 30; left: 50%; bottom: calc(100% + 7px); transform: translate(-50%,3px); padding: 5px 8px; border-radius: 5px; background: #27324a; color: #fff; font-size: 10px; font-weight: 500; line-height: 1.4; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s ease, transform .12s ease, visibility .12s ease; }
+.icon-tooltip::after { content: attr(data-tooltip); position: absolute; z-index: 30; left: 50%; bottom: calc(100% + 7px); transform: translate(-50%,3px); padding: 5px 8px; border-radius: 5px; background: #27324a; color: #fff; font-size: 10px; font-weight: 500; line-height: 1; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s ease, transform .12s ease, visibility .12s ease; }
 .icon-tooltip:hover::after, .icon-tooltip:focus-visible::after { opacity: 1; visibility: visible; transform: translate(-50%,0); }
 .cookie-actions .icon-tooltip { width: 34px; height: 34px; padding: 0; flex-shrink: 0; }
 
@@ -188,17 +181,12 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 /* 下载失败提示与面板底部保持间距，避免提示框贴住边缘。 */
 .download-status-error { margin: 14px 20px 18px; width: calc(100% - 40px); }
 
-/* 媒体下载筛选操作与微博删除筛选栏保持一致。 */
-.download-filter-foot { margin-bottom: 16px; padding-bottom: 14px; }
-.download-filter-foot .account-actions { margin-left: auto; }
 
 /* 任务操作使用统一图标按钮；原生 title 提供悬停提示。 */
 .task-action-icon { display:inline-flex; align-items:center; justify-content:center; width:34px; height:34px; padding:0; }
 .task-action-icon:disabled { opacity:.55; cursor:not-allowed; }
-.task-list-scroll { max-height:min(58vh,620px); min-height:120px; overflow:auto; scrollbar-width:none; -ms-overflow-style:none; }
-.task-list-scroll::-webkit-scrollbar { display:none; width:0; height:0; }
-.task-list-scroll thead { position:sticky; top:0; z-index:2; background:var(--panel); }
-.download-filter-foot { display:flex; align-items:center; gap:14px; margin-top:14px; }
+/* 媒体下载筛选栏布局与微博删除筛选栏保持一致。 */
+.download-filter-foot { display:flex; align-items:center; gap:14px; margin:14px 0 0; padding:14px 20px 0; }
 .download-filter-foot .account-actions { margin-left:auto; }
 .download-filter-foot .inline-note { font-size:11px; }
 
@@ -261,6 +249,7 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
   gap: 8px;
   flex: 0 0 auto;
   align-items: flex-start;
+  align-self: center;
 }
 .download-form-grid .field-switch > span {
   font-size: 10px;
@@ -269,7 +258,7 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
   white-space: nowrap;
 }
 .download-form-grid .field-switch .switch-control {
-  margin-top: 6px;
+  margin-top: 0;
 }
 .download-filter-foot { margin: 14px 0 0; padding: 14px 20px 0; }
 .download-user-panel { padding-bottom: 18px; }
@@ -281,20 +270,7 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .switch-control input:checked + .switch-track .switch-thumb { transform: translateX(16px); }
 .switch-control input:focus-visible + .switch-track { outline: 2px solid #8ea0ed; outline-offset: 2px; }
 
-.task-list-scroll table { min-width: 980px; table-layout: fixed; }
-.task-list-scroll thead th { text-align: center; }
-.task-list-scroll th, .task-list-scroll td { padding: 7px 8px; vertical-align: middle; }
-.task-list-scroll th:nth-child(1), .task-list-scroll td:nth-child(1) { width: 42px; text-align: center; }
-.task-list-scroll th:nth-child(2), .task-list-scroll td:nth-child(2) { width: 22%; }
-.task-list-scroll th:nth-child(3), .task-list-scroll td:nth-child(3) { width: 68px; text-align: center; }
-.task-list-scroll th:nth-child(4), .task-list-scroll td:nth-child(4) { width: 86px; text-align: center; }
-.task-list-scroll th:nth-child(5), .task-list-scroll td:nth-child(5) { width: 112px; }
-.task-list-scroll th:nth-child(6), .task-list-scroll td:nth-child(6) { width: 240px; }
-.task-list-scroll th:nth-child(7), .task-list-scroll td:nth-child(7) { width: 92px; text-align: center; }
-.task-list-scroll th:nth-child(8), .task-list-scroll td:nth-child(8) { width: 58px; text-align: center; }
-.task-detail-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.task-operation-actions { display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; gap: 3px; margin: 0; }
-.task-operation-actions .task-action-icon { width: 29px; height: 29px; flex: 0 0 29px; }
+
 
 
 @media (max-width: 760px) {
@@ -315,7 +291,6 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
   min-width: 0;
   max-height: min(70vh, 680px);
 }
-.task-list-heading { flex-shrink: 0; justify-content: space-between; }
 .task-bulk-actions { display: flex; align-items: center; gap: 4px; }
 .task-start-selected { color: var(--accent, #526bd7); }
 
@@ -327,6 +302,7 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
   overflow-x: auto;
   min-width: 0;
   width: 100%;
+  padding-bottom: 12px;
   scrollbar-width: thin;
   scrollbar-color: #c5cbd6 transparent;
 }
