@@ -151,9 +151,10 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .cookie-lock-note { display:inline-flex; align-items:center; color:var(--muted); font-size:10px; line-height:1.6; }
 
 /* 图标按钮悬停时显示轻量功能提示。 */
-.cookie-actions .icon-tooltip { position:relative; width:34px; height:34px; padding:0; flex-shrink:0; }
-.cookie-actions .icon-tooltip::after { content:attr(data-tooltip); position:absolute; z-index:30; left:50%; bottom:calc(100% + 7px); transform:translate(-50%,3px); padding:5px 8px; border-radius:5px; background:#27324a; color:#fff; font-size:10px; font-weight:500; line-height:1.4; white-space:nowrap; pointer-events:none; opacity:0; visibility:hidden; transition:opacity .12s ease,transform .12s ease,visibility .12s ease; }
-.cookie-actions .icon-tooltip:hover::after,.cookie-actions .icon-tooltip:focus-visible::after { opacity:1; visibility:visible; transform:translate(-50%,0); }
+.icon-tooltip { position: relative; }
+.icon-tooltip::after { content: attr(data-tooltip); position: absolute; z-index: 30; left: 50%; bottom: calc(100% + 7px); transform: translate(-50%,3px); padding: 5px 8px; border-radius: 5px; background: #27324a; color: #fff; font-size: 10px; font-weight: 500; line-height: 1.4; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s ease, transform .12s ease, visibility .12s ease; }
+.icon-tooltip:hover::after, .icon-tooltip:focus-visible::after { opacity: 1; visibility: visible; transform: translate(-50%,0); }
+.cookie-actions .icon-tooltip { width: 34px; height: 34px; padding: 0; flex-shrink: 0; }
 
 
 /* Cookie 保存按钮与状态提示在同一行垂直居中，覆盖导入区域按钮的旧上边距。 */
@@ -294,9 +295,7 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; overflow: hidden; 
 .task-detail-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-operation-actions { display: flex; align-items: center; justify-content: center; flex-wrap: nowrap; gap: 3px; margin: 0; }
 .task-operation-actions .task-action-icon { width: 29px; height: 29px; flex: 0 0 29px; }
-.task-action-icon.icon-tooltip { position: relative; }
-.task-action-icon.icon-tooltip::after { content: attr(data-tooltip); position: absolute; z-index: 30; left: 50%; bottom: calc(100% + 7px); transform: translate(-50%,3px); padding: 5px 8px; border-radius: 5px; background: #27324a; color: #fff; font-size: 10px; font-weight: 500; line-height: 1.4; white-space: nowrap; pointer-events: none; opacity: 0; visibility: hidden; transition: opacity .12s ease,transform .12s ease,visibility .12s ease; }
-.task-action-icon.icon-tooltip:hover::after, .task-action-icon.icon-tooltip:focus-visible::after { opacity: 1; visibility: visible; transform: translate(-50%,0); }
+
 
 @media (max-width: 760px) {
   .download-filter-foot { align-items: flex-start; flex-direction: column; }
