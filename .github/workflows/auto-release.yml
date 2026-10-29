@@ -1,0 +1,278 @@
+name: Auto Release
+
+# 正式发布：仅在开发分支 dev 上手动运行。
+# 流程：锁定 SHA → CI 内写入新版本 → 三端全成功 → merge 到 main → 推版本/Tag/Release → 同步 dev。
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "版本升级级别（patch / minor / major）"
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+
+permissions:
+  contents: write
+
+concurrency:
+  group: weibo-manager-auto-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate and calculate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      source_sha: ${{ steps.meta.outputs.source_sha }}
+    steps:
+      - name: Ensure workflow runs on dev
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/dev" ]; then
+            echo "::error::Auto Release 只能在 dev 分支上运行（当前: $GITHUB_REF）。"
+            exit 1
+          fi
+
+      - name: Checkout dev
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Calculate version and lock commit
+        id: meta
+        env:
+          BUMP: ${{ inputs.bump }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
+          echo "Locked source SHA: $SOURCE_SHA"
+
+          node <<'NODE'
+          const fs = require('fs');
+          const bump = process.env.BUMP || 'patch';
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const config = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+          const cargo = fs.readFileSync('src-tauri/Cargo.toml', 'utf8').match(/^version = "([^"]+)"/m)?.[1];
+          if (pkg.version !== config.version || pkg.version !== cargo) {
+            throw new Error(`Version mismatch: package.json=${pkg.version}, tauri.conf.json=${config.version}, Cargo.toml=${cargo}`);
+          }
+          const parts = pkg.version.split('.').map(Number);
+          if (parts.length !== 3 || parts.some(n => !Number.isInteger(n) || n < 0)) {
+            throw new Error(`Invalid semantic version: ${pkg.version}`);
+          }
+          if (!['major', 'minor', 'patch'].includes(bump)) {
+            throw new Error(`Invalid bump: ${bump}`);
+          }
+          if (bump === 'major') {
+            parts[0] += 1; parts[1] = 0; parts[2] = 0;
+          } else if (bump === 'minor') {
+            parts[1] += 1; parts[2] = 0;
+          } else {
+            parts[2] += 1;
+          }
+          const version = parts.join('.');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          console.log(`Bump=${bump}: ${pkg.version} -> ${version}`);
+          NODE
+
+          VERSION="$(grep '^version=' "$GITHUB_OUTPUT" | tail -n1 | cut -d= -f2)"
+          if gh release view "v${VERSION}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "::error::Release v${VERSION} 已存在。"
+            exit 1
+          fi
+          if git ls-remote --tags origin "refs/tags/v${VERSION}" | grep -q .; then
+            echo "::error::Tag v${VERSION} 已存在。"
+            exit 1
+          fi
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            artifact: weibo-manager-windows
+            path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          - name: macOS Apple Silicon
+            os: macos-14
+            target: aarch64-apple-darwin
+            bundles: dmg
+            artifact: weibo-manager-macos-applesilicon
+            path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          - name: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+            artifact: weibo-manager-macos-intel
+            path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout locked commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Apply release version in workspace only
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          for (const path of ['package.json', 'src-tauri/tauri.conf.json']) {
+            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+            data.version = process.env.VERSION;
+            fs.writeFileSync(path, JSON.stringify(data, null, 2) + '\n');
+          }
+          const cargoPath = 'src-tauri/Cargo.toml';
+          const cargo = fs.readFileSync(cargoPath, 'utf8');
+          fs.writeFileSync(cargoPath, cargo.replace(/^version = "[^"]+"/m, `version = "${process.env.VERSION}"`));
+          NODE
+
+      - name: Install frontend dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Generate platform icons
+        run: pnpm tauri icon src-tauri/icons/logo.svg
+
+      - name: Build installer
+        run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Merge, tag and publish
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Merge locked commit into main and publish
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin main dev
+          git checkout -B main origin/main
+
+          if ! git merge --no-ff "$SOURCE_SHA" -m "chore(release): merge dev ${SOURCE_SHA:0:7} for v${VERSION}"; then
+            echo "::error::将锁定的 dev 提交合并进 main 时发生冲突，已中止发布。请人工处理后再运行。"
+            git merge --abort || true
+            exit 1
+          fi
+
+          node <<'NODE'
+          const fs = require('fs');
+          for (const path of ['package.json', 'src-tauri/tauri.conf.json']) {
+            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+            data.version = process.env.VERSION;
+            fs.writeFileSync(path, JSON.stringify(data, null, 2) + '\n');
+          }
+          const cargoPath = 'src-tauri/Cargo.toml';
+          const cargo = fs.readFileSync(cargoPath, 'utf8');
+          fs.writeFileSync(cargoPath, cargo.replace(/^version = "[^"]+"/m, `version = "${process.env.VERSION}"`));
+          NODE
+
+          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): bump version to v${VERSION}"
+          fi
+
+          git push origin HEAD:main
+          RELEASE_COMMIT="$(git rev-parse HEAD)"
+          echo "release_commit=$RELEASE_COMMIT" >> "$GITHUB_ENV"
+
+          git tag "v${VERSION}" "$RELEASE_COMMIT"
+          git push origin "v${VERSION}"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: weibo-manager-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release create "v${VERSION}" release-assets/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${RELEASE_COMMIT}" \
+            --title "Weibo Manager v${VERSION}" \
+            --generate-notes
+
+      - name: Sync version back to dev
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch origin dev
+          git checkout -B dev origin/dev
+
+          node <<'NODE'
+          const fs = require('fs');
+          for (const path of ['package.json', 'src-tauri/tauri.conf.json']) {
+            const data = JSON.parse(fs.readFileSync(path, 'utf8'));
+            data.version = process.env.VERSION;
+            fs.writeFileSync(path, JSON.stringify(data, null, 2) + '\n');
+          }
+          const cargoPath = 'src-tauri/Cargo.toml';
+          const cargo = fs.readFileSync(cargoPath, 'utf8');
+          fs.writeFileSync(cargoPath, cargo.replace(/^version = "[^"]+"/m, `version = "${process.env.VERSION}"`));
+          NODE
+
+          git add package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(release): sync version to v${VERSION}"
+            git push origin HEAD:dev
+          else
+            echo "dev already at v${VERSION}"
+          fi
