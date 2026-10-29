@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" rx="190" fill="#fff"/>
+  <path d="M642 170 C720 130 808 163 850 236 C871 273 879 314 864 349" fill="none" stroke="#ff8a19" stroke-width="72" stroke-linecap="round"/>
+  <path d="M680 302 C721 289 758 313 766 352 C771 377 762 397 746 412" fill="none" stroke="#ff8a19" stroke-width="62" stroke-linecap="round"/>
+  <path fill="#d71935" d="M152 584 C171 435 293 301 445 263 C520 244 595 256 635 287 C660 306 666 337 652 364 C640 388 621 406 595 423 C686 399 768 424 798 477 C839 551 774 655 666 728 C562 799 425 835 314 811 C196 786 136 692 152 584Z"/>
+  <path fill="#f21d3a" d="M181 589 C202 459 309 349 444 316 C508 300 569 308 603 332 C620 344 625 362 617 381 C607 402 584 421 556 438 C647 415 719 438 741 485 C766 540 708 621 620 678 C530 735 414 764 322 745 C222 724 164 666 181 589Z"/>
+  <ellipse cx="463" cy="572" rx="280" ry="192" fill="#fff"/>
+  <ellipse cx="483" cy="581" rx="151" ry="139" fill="#080808"/>
+  <ellipse cx="438" cy="615" rx="47" ry="41" fill="#fff"/>
+  <ellipse cx="526" cy="540" rx="20" ry="19" fill="#fff"/>
+</svg>

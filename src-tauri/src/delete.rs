@@ -1,0 +1,732 @@
+//! 微博删除任务的只读预览与任务记录。
+//! 本模块仅获取微博、保存待确认任务；不包含任何真实删除请求。
+
+use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::auth::{check_cookie_availability, SessionStore};
+use crate::logger::write_log;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeiboPost {
+    pub id: String,
+    pub date: String,
+    pub created_at: String,
+    pub kind: String,
+    pub text: String,
+    pub media: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletePostResult { pub post_id: String, pub state: String, pub detail: String }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteTask {
+    pub id: u64,
+    pub title: String,
+    pub kind: String,
+    pub state: String,
+    pub progress: u8,
+    pub detail: String,
+    pub created_at: String,
+    pub post_ids: Vec<String>,
+    pub date_from: String,
+    pub date_to: String,
+    pub keyword: String,
+    pub post_type: String,
+    #[serde(default)]
+    pub results: Vec<DeletePostResult>,
+}
+
+fn unix_millis() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
+}
+
+fn db_connection(app: &AppHandle) -> Result<Connection, String> {
+    let dir = app.path().app_data_dir().map_err(|e| format!("无法定位应用数据目录：{e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建应用数据目录：{e}"))?;
+    let db = Connection::open(dir.join("weibo-manager.sqlite3")).map_err(|e| format!("无法打开任务数据库：{e}"))?;
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL, detail TEXT NOT NULL);"
+    ).map_err(|e| format!("初始化任务表失败：{e}"))?;
+    Ok(db)
+}
+
+fn month_number(value: &str) -> Option<&'static str> {
+    match value {
+        "Jan" => Some("01"), "Feb" => Some("02"), "Mar" => Some("03"),
+        "Apr" => Some("04"), "May" => Some("05"), "Jun" => Some("06"),
+        "Jul" => Some("07"), "Aug" => Some("08"), "Sep" => Some("09"),
+        "Oct" => Some("10"), "Nov" => Some("11"), "Dec" => Some("12"),
+        _ => None,
+    }
+}
+
+fn date_from_weibo(value: &str) -> String {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    if parts.len() >= 6 {
+        if let (Some(month), Some(day), Some(year)) = (month_number(parts[1]), parts[2].parse::<u32>().ok(), parts[5].parse::<u32>().ok()) {
+            return format!("{year:04}-{month}-{day:02}");
+        }
+    }
+    value.get(..10).unwrap_or(value).to_string()
+}
+
+fn post_text(mblog: &Value) -> String {
+    let raw = mblog.get("text_raw").and_then(Value::as_str)
+        .or_else(|| mblog.get("text").and_then(Value::as_str)).unwrap_or("");
+    // 仅作轻量 HTML 标签清理，避免将网页标签原样显示在表格中。
+    let mut out = String::with_capacity(raw.len());
+    let mut in_tag = false;
+    for ch in raw.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+}
+
+fn parse_post(mblog: &Value) -> Option<WeiboPost> {
+    let id = mblog.get("id").map(|v| if let Some(s) = v.as_str() { s.to_string() } else { v.to_string() })?;
+    if id.is_empty() { return None; }
+    let created_at = mblog.get("created_at").and_then(Value::as_str).unwrap_or("").to_string();
+    let date = date_from_weibo(&created_at);
+    let kind = if mblog.get("retweeted_status").is_some() { "转发" } else { "原创" }.to_string();
+    let has_pics = mblog.get("pics").and_then(Value::as_array).map(|v| !v.is_empty()).unwrap_or(false);
+    let page_type = mblog.get("page_info").and_then(|v| v.get("type")).and_then(Value::as_str).unwrap_or("");
+    let media = (if has_pics { "图片" } else if page_type == "video" || mblog.get("video").is_some() { "视频" } else { "无媒体" }).to_string();
+    Some(WeiboPost { id, date, created_at, kind, text: post_text(mblog), media })
+}
+
+/// 控制列表读取的暂停与取消状态；读取任务在网络请求前后检查这些标记。
+#[derive(Default)]
+pub struct DeleteSearchControl {
+    paused: AtomicBool,
+    cancelled: AtomicBool,
+    task_paused: AtomicBool,
+    task_cancelled: AtomicBool,
+    task_running: AtomicBool,
+    active_task_id: std::sync::atomic::AtomicU64,
+    task_stopped_notify: tokio::sync::Notify,
+    cookie_removal: AtomicBool,
+}
+
+struct TaskExecutionGuard<'a> {
+    running: &'a AtomicBool,
+    active_task_id: Option<&'a std::sync::atomic::AtomicU64>,
+    stopped_notify: Option<&'a tokio::sync::Notify>,
+}
+impl Drop for TaskExecutionGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(task_id) = self.active_task_id {
+            task_id.store(0, Ordering::Release);
+        }
+        self.running.store(false, Ordering::Release);
+        if let Some(notify) = self.stopped_notify {
+            notify.notify_one();
+        }
+    }
+}
+
+pub(crate) async fn begin_cookie_removal(control: &DeleteSearchControl) {
+    control.cookie_removal.store(true, Ordering::Release);
+    control.cancelled.store(true, Ordering::Release);
+    control.paused.store(false, Ordering::Release);
+    control.task_cancelled.store(true, Ordering::Release);
+    control.task_paused.store(false, Ordering::Release);
+    while control.task_running.load(Ordering::Acquire) {
+        task_sleep(100).await;
+    }
+}
+
+pub(crate) fn finish_cookie_removal(control: &DeleteSearchControl) {
+    control.task_cancelled.store(false, Ordering::Release);
+    control.cookie_removal.store(false, Ordering::Release);
+}
+#[tauri::command]
+pub fn set_delete_search_paused(paused: bool, control: State<'_, DeleteSearchControl>) {
+    control.paused.store(paused, Ordering::Relaxed);
+}
+#[tauri::command]
+pub fn set_delete_search_cancelled(cancelled: bool, control: State<'_, DeleteSearchControl>) {
+    // Cookie 删除期间不允许迟到的前端收尾逻辑重新启用搜索。
+    if !cancelled && control.cookie_removal.load(Ordering::Acquire) { return; }
+    control.cancelled.store(cancelled, Ordering::Release);
+    if cancelled {
+        // 取消时解除暂停，避免暂停中的读取任务一直等待。
+        control.paused.store(false, Ordering::Relaxed);
+    }
+}
+async fn wait_for_search_resume(control: &DeleteSearchControl) -> bool {
+    while control.paused.load(Ordering::Acquire)
+        && !control.cancelled.load(Ordering::Acquire)
+        && !control.cookie_removal.load(Ordering::Acquire) {
+        tauri::async_runtime::spawn_blocking(|| std::thread::sleep(std::time::Duration::from_millis(150))).await.ok();
+    }
+    !control.cancelled.load(Ordering::Acquire) && !control.cookie_removal.load(Ordering::Acquire)
+}
+async fn wait_request_interval(app: &AppHandle, control: &DeleteSearchControl) -> bool {
+    let delay = crate::settings::request_delay_ms(app);
+    let started = std::time::Instant::now();
+    while started.elapsed().as_millis() < delay as u128 {
+        if !wait_for_search_resume(control).await { return false; }
+        let remaining = delay.saturating_sub(started.elapsed().as_millis() as u64);
+        let slice = remaining.min(150);
+        tauri::async_runtime::spawn_blocking(move || std::thread::sleep(std::time::Duration::from_millis(slice))).await.ok();
+    }
+    !control.cancelled.load(Ordering::Relaxed)
+}
+fn looks_rate_limited(body: &Value) -> bool {
+    let mut messages = Vec::new();
+    for key in ["msg", "errmsg", "message", "error", "error_code", "code", "errno"] {
+        if let Some(value) = body.get(key) {
+            messages.push(value.to_string().to_lowercase());
+        }
+    }
+    let text = messages.join(" ");
+    ["429", "10023", "10024", "rate limit", "too many requests", "请求过于频繁", "操作频繁", "访问频次", "频率过高"]
+        .iter().any(|needle| text.contains(needle))
+}
+#[tauri::command]
+pub async fn get_delete_posts(
+    date_from: String,
+    app: AppHandle,
+    store: State<'_, SessionStore>,
+    control: State<'_, DeleteSearchControl>,
+ ) -> Result<Vec<WeiboPost>, String> {
+    let _ = write_log(&app, "INFO", "delete", &format!("开始读取微博列表，起始日期：{}", if date_from.trim().is_empty() { "不限" } else { date_from.as_str() }));
+    let mut posts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if !wait_for_search_resume(&control).await { return Ok(posts); }
+    let cookie = store.cookie()?;
+    if check_cookie_availability(&cookie).await? != "valid" {
+        return Err("Cookie 已失效，请重新登录微博后再读取列表。".into());
+    }
+    let client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(25)).build()
+        .map_err(|e| format!("初始化微博请求失败：{e}"))?;
+    if !wait_for_search_resume(&control).await { return Ok(posts); }
+    let config = client.get("https://m.weibo.cn/api/config")
+        .header(COOKIE, cookie.as_str()).header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
+        .header(ACCEPT, "application/json, text/plain, */*").send().await
+        .map_err(|e| format!("获取微博账号信息失败，请检查网络：{e}"))?;
+    if control.cancelled.load(Ordering::Relaxed) { return Ok(posts); }
+    if config.status().as_u16() == 401 || config.status().as_u16() == 403 {
+        return Err("微博拒绝了账号信息请求（401/403）。请检查登录状态，必要时重新登录。".into());
+    }
+    if config.status().as_u16() == 429 {
+        return Err("微博返回限流响应（HTTP 429），已停止读取。请等待一段时间后再试。".into());
+    }
+    if !config.status().is_success() {
+        return Err(format!("获取微博账号信息失败，HTTP {}", config.status().as_u16()));
+    }
+    let config_json: Value = config.json().await.map_err(|e| format!("微博账号信息解析失败：{e}"))?;
+    if control.cancelled.load(Ordering::Relaxed) { return Ok(posts); }
+    if looks_rate_limited(&config_json) {
+        return Err("微博提示请求过于频繁，已停止读取。请等待一段时间后再试。".into());
+    }
+    let uid = config_json.pointer("/data/uid").and_then(Value::as_u64)
+        .map(|v| v.to_string())
+        .or_else(|| config_json.pointer("/data/uid").and_then(Value::as_str).map(str::to_string))
+        .filter(|v| !v.is_empty() && v != "0")
+        .ok_or_else(|| "未能从当前 Cookie 识别微博 UID。请重新登录后再试；当前不会使用模拟数据。".to_string())?;
+    let _ = write_log(&app, "INFO", "delete", "已识别当前微博账号，开始分页读取（不记录账号标识）");
+
+    for page in 1..=1000 {
+        if !wait_for_search_resume(&control).await { return Ok(posts); }
+        if !wait_request_interval(&app, &control).await { return Ok(posts); }
+        if !wait_for_search_resume(&control).await { return Ok(posts); }
+        let url = format!("https://m.weibo.cn/api/container/getIndex?containerid=107603{uid}&page={page}");
+        let response = client.get(&url).header(COOKIE, &cookie)
+            .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36")
+            .header(REFERER, "https://m.weibo.cn/").header(ACCEPT, "application/json, text/plain, */*")
+            .send().await.map_err(|e| format!("读取微博列表失败：{e}"))?;
+        if control.cancelled.load(Ordering::Relaxed) { return Ok(posts); }
+        if response.status().as_u16() == 401 || response.status().as_u16() == 403 {
+            return Err("微博拒绝了列表请求（401/403）。请检查登录状态，必要时重新登录。已停止继续请求。".into());
+        }
+        if response.status().as_u16() == 429 || response.status().as_u16() == 418 {
+            return Err(format!("微博返回限流响应（HTTP {}），已停止读取。请等待一段时间后再试。", response.status().as_u16()));
+        }
+        if !response.status().is_success() {
+            return Err(format!("读取微博列表失败，HTTP {}", response.status().as_u16()));
+        }
+        let body: Value = response.json().await.map_err(|e| format!("微博列表解析失败：{e}"))?;
+        if control.cancelled.load(Ordering::Relaxed) { return Ok(posts); }
+        if looks_rate_limited(&body) {
+            return Err("微博提示请求过于频繁或触发风控，已停止读取。请等待一段时间后再试。".into());
+        }
+        let cards = body.pointer("/data/cards").and_then(Value::as_array)
+            .ok_or_else(|| "微博列表接口没有返回预期数据；请确认登录状态有效。".to_string())?;
+        let mut page_posts = Vec::new();
+        for card in cards {
+            if let Some(mblog) = card.get("mblog") {
+                if let Some(post) = parse_post(mblog) { page_posts.push(post); }
+            }
+        }
+        if page_posts.is_empty() { break; }
+        let reached_start = !date_from.trim().is_empty() && page_posts.iter().all(|post| post.date < date_from);
+        for post in page_posts {
+            if control.cancelled.load(Ordering::Acquire) || control.cookie_removal.load(Ordering::Acquire) {
+                return Ok(posts);
+            }
+            if seen.insert(post.id.clone()) {
+                posts.push(post.clone());
+                if let Err(error) = app.emit("delete-post-item", post.clone()) {
+                    let _ = write_log(&app, "ERROR", "delete", &format!("逐条展示事件发送失败，微博 ID={}：{}", post.id, error));
+                } else {
+                    let _ = write_log(&app, "DEBUG", "delete", &format!("逐条展示事件已发送，微博 ID={}", post.id));
+                }
+            }
+        }
+        if reached_start { break; }
+    }
+    let _ = write_log(&app, "INFO", "delete", &format!("微博列表读取结束，共收集 {} 条微博", posts.len()));
+    Ok(posts)
+}
+
+#[tauri::command]
+pub fn create_delete_task(
+    app: AppHandle,
+    post_ids: Vec<String>,
+    date_from: String,
+    date_to: String,
+    keyword: String,
+    post_type: String,
+) -> Result<DeleteTask, String> {
+    if post_ids.is_empty() { return Err("请至少选择一条微博后再创建任务。".into()); }
+    if post_ids.iter().any(|id| id.trim().is_empty()) { return Err("选中的微博 ID 无效，请刷新列表后重试。".into()); }
+    let mut db = db_connection(&app)?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| format!("无法锁定删除任务记录：{e}"))?;
+    let mut requested = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for post_id in post_ids {
+        if seen.insert(post_id.clone()) { requested.push(post_id); }
+    }
+    let mut claimed = std::collections::HashSet::new();
+    {
+        let mut statement = tx.prepare("SELECT state, detail FROM tasks WHERE kind='删除' AND state IN ('未开始','排队中','执行中','暂停中','已暂停','失败')")
+            .map_err(|e| format!("检查重复删除任务失败：{e}"))?;
+        let rows = statement.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+            .map_err(|e| format!("读取现有删除任务失败：{e}"))?;
+        for row in rows {
+            let (_, serialized) = row.map_err(|e| format!("读取现有删除任务失败：{e}"))?;
+            if let Ok(existing) = serde_json::from_str::<DeleteTask>(&serialized) {
+                claimed.extend(existing.post_ids);
+            }
+        }
+    }
+    let skipped = requested.iter().filter(|post_id| claimed.contains(*post_id)).count();
+    let post_ids: Vec<String> = requested.into_iter().filter(|post_id| !claimed.contains(post_id)).collect();
+    if post_ids.is_empty() {
+        return Err("所选微博都已存在于其他未完成的删除任务中，请先处理或重试原任务。".into());
+    }
+    let id = unix_millis();
+    let created_at = format!("{id}");
+    let date_label = match (date_from.trim().is_empty(), date_to.trim().is_empty()) {
+        (true, true) => "全部时间".to_string(),
+        (false, true) => format!("{} 起", date_from),
+        (true, false) => format!("截至 {}", date_to),
+        (false, false) => format!("{} 至 {}", date_from, date_to),
+    };
+    let detail = format!("待确认 {} 条微博，日期 {}，类型 {}，关键词 {}{}",
+        post_ids.len(), date_label, post_type, if keyword.trim().is_empty() { "无" } else { keyword.trim() },
+        if skipped > 0 { format!("，已跳过与其他未完成任务重叠的 {} 条微博", skipped) } else { String::new() });
+    let task = DeleteTask {
+        id, title: format!("微博删除 {} 条", post_ids.len()), kind: "删除".into(),
+        state: "未开始".into(), progress: 0, detail, created_at: created_at.clone(),
+        post_ids, date_from, date_to, keyword, post_type, results: Vec::new(),
+    };
+    let serialized = serde_json::to_string(&task).map_err(|e| format!("序列化任务失败：{e}"))?;
+    tx.execute("INSERT INTO tasks (id, kind, state, created_at, detail) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![task.id.to_string(), "删除", task.state, task.created_at, serialized])
+        .map_err(|e| format!("保存删除任务失败：{e}"))?;
+    tx.commit().map_err(|e| format!("提交删除任务失败：{e}"))?;
+    Ok(task)
+}
+
+
+
+fn save_delete_task(app: &AppHandle, task: &DeleteTask) -> Result<(), String> {
+ let db=db_connection(app)?; let json=serde_json::to_string(task).map_err(|e|format!("序列化删除任务失败：{e}"))?;
+ db.execute("UPDATE tasks SET state=?1, detail=?2 WHERE id=?3 AND kind='删除'",params![task.state,json,task.id.to_string()]).map_err(|e|format!("更新删除任务失败：{e}"))?; Ok(())
+}
+fn load_delete_task(app:&AppHandle,id:u64)->Result<DeleteTask,String>{
+ let db=db_connection(app)?;let json:String=db.query_row("SELECT detail FROM tasks WHERE id=?1 AND kind='删除'",params![id.to_string()],|r|r.get(0)).map_err(|e|format!("找不到删除任务：{e}"))?;
+ serde_json::from_str(&json).map_err(|e|format!("解析删除任务失败：{e}"))
+}
+async fn task_sleep(ms:u64){tauri::async_runtime::spawn_blocking(move||std::thread::sleep(std::time::Duration::from_millis(ms))).await.ok();}
+async fn wait_delete_resume(c:&DeleteSearchControl)->bool{!c.task_cancelled.load(Ordering::Acquire)&&!c.task_paused.load(Ordering::Acquire)}
+fn numeric_id_to_bid(id:&str)->Option<String>{
+ const A:&[u8]=b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";if id.is_empty()||!id.bytes().all(|b|b.is_ascii_digit()){return None;}
+ let mut left=id;let mut out=Vec::new();while !left.is_empty(){let start=left.len().saturating_sub(7);let mut n=left[start..].parse::<u64>().ok()?;let mut chars=Vec::new();while n>0{chars.push(A[(n%62)as usize]as char);n/=62;}if chars.is_empty(){chars.push('0');}chars.reverse();let mut p:String=chars.into_iter().collect();if start>0{p=format!("{:0>4}",p);}out.insert(0,p);left=&left[..start];}Some(out.concat())
+}
+fn clean_html_text(raw:&str)->String{let mut o=String::new();let mut tag=false;for c in raw.chars(){match c{'<'=>tag=true,'>'=>tag=false,_ if !tag=>o.push(c),_=>{}}}o.replace("&nbsp;"," ").replace("&amp;","&")}
+fn href_from_anchor(tag: &str) -> Option<String> {
+    let lower = tag.to_ascii_lowercase();
+    let href_pos = lower.find("href")?;
+    let after_name = &tag[href_pos + 4..];
+    let equal_pos = after_name.find('=')?;
+    let value = after_name[equal_pos + 1..].trim_start();
+    let quote = value.chars().next()?;
+    if quote == '"' || quote == '\'' {
+        let end = value[1..].find(quote)?;
+        Some(value[1..1 + end].replace("&amp;", "&"))
+    } else {
+        let end = value.find(char::is_whitespace).unwrap_or(value.len());
+        Some(value[..end].trim_end_matches('>').replace("&amp;", "&"))
+    }
+}
+fn absolute_weibo_url(url: String) -> String {
+    if url.starts_with('/') { format!("https://weibo.cn{url}") } else { url }
+}
+fn links_for_ids(html: &str, wanted: &std::collections::HashSet<String>) -> std::collections::HashMap<String,String> {
+    let mut out = std::collections::HashMap::new();
+    let mut cur = 0;
+    while let Some(rel) = html[cur..].find("<a") {
+        let s = cur + rel;
+        let Some(te) = html[s..].find('>') else { break };
+        let e = s + te;
+        let Some(cl) = html[e + 1..].find("</a>") else { break };
+        let z = e + 1 + cl;
+        let tag = &html[s..=e];
+        let label = clean_html_text(&html[e + 1..z]).split_whitespace().collect::<String>();
+        if label == "删除" {
+            if let Some(raw_url) = href_from_anchor(tag) {
+                let url = absolute_weibo_url(raw_url);
+                for id in wanted {
+                    if url.contains(&format!("id={id}")) { out.insert(id.clone(), url.clone()); }
+                }
+            }
+        }
+        cur = z + 4;
+        if cur >= html.len() { break; }
+    }
+    out
+}
+fn find_anchor_url(html: &str, wanted: &[&str]) -> Option<String> {
+    let mut cur = 0;
+    while let Some(rel) = html[cur..].find("<a") {
+        let s = cur + rel;
+        let e = s + html[s..].find('>')?;
+        let z = e + 1 + html[e + 1..].find("</a>")?;
+        let label = clean_html_text(&html[e + 1..z]).split_whitespace().collect::<String>();
+        let is_confirm = wanted.iter().any(|v| label == *v)
+            || (!label.contains("取消") && !label.contains("私密")
+                && (label.contains("确定") || label.contains("确认")) && label.contains("删"));
+        if is_confirm {
+            if let Some(url) = href_from_anchor(&html[s..=e]) {
+                return Some(absolute_weibo_url(url));
+            }
+        }
+        cur = z + 4;
+        if cur >= html.len() { break; }
+    }
+    None
+}
+fn find_st_token(html: &str) -> Option<String> {
+    let mut cur = 0;
+    while let Some(rel) = html[cur..].find("<a") {
+        let s = cur + rel;
+        let e = s + html[s..].find('>')?;
+        if let Some(url) = href_from_anchor(&html[s..=e]) {
+            let query = url.split_once('?').map(|(_, q)| q).unwrap_or("");
+            for pair in query.split('&') {
+                if let Some((key, value)) = pair.split_once('=') {
+                    if key == "st" && !value.is_empty() { return Some(value.to_string()); }
+                }
+            }
+        }
+        cur = e + 1;
+        if cur >= html.len() { break; }
+    }
+    None
+}
+fn replace_st_token(url: &str, token: &str) -> String {
+    if let Some(pos) = url.find("st=") {
+        let value_start = pos + 3;
+        let value_end = url[value_start..].find('&').map(|n| value_start + n).unwrap_or(url.len());
+        format!("{}{}{}", &url[..value_start], token, &url[value_end..])
+    } else {
+        format!("{}{}st={}", url, if url.contains('?') { "&" } else { "?" }, token)
+    }
+}
+async fn delete_one(client: &reqwest::Client, url: &str, uid: &str, cookie: &str) -> Result<(), String> {
+    let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
+    let mut delete_url = url.to_string();
+    for attempt in 0..2 {
+        let first = client.get(&delete_url)
+            .header(COOKIE, cookie)
+            .header(USER_AGENT, ua)
+            .header(REFERER, format!("https://weibo.cn/{uid}/profile"))
+            .header(ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .send().await.map_err(|e| format!("请求删除确认页失败：{e}"))?;
+        if first.status().as_u16() == 401 || first.status().as_u16() == 403 {
+            return Err(format!("HTTP {}：登录失效或触发风控，停止后续删除", first.status().as_u16()));
+        }
+        if !first.status().is_success() {
+            return Err(format!("获取删除确认页失败，HTTP {}", first.status().as_u16()));
+        }
+        let html = first.text().await.map_err(|e| format!("读取删除确认页失败：{e}"))?;
+        let Some(confirm) = find_anchor_url(&html, &["确定删除", "确认删除"]) else {
+            if attempt == 0 {
+                let profile = client.get(format!("https://weibo.cn/{uid}/profile?page=1"))
+                    .header(COOKIE, cookie).header(USER_AGENT, ua)
+                    .header(REFERER, "https://weibo.cn/")
+                    .send().await.map_err(|e| format!("刷新删除令牌失败：{e}"))?;
+                if profile.status().is_success() {
+                    let profile_html = profile.text().await.map_err(|e| format!("读取新令牌失败：{e}"))?;
+                    if let Some(token) = find_st_token(&profile_html) {
+                        delete_url = replace_st_token(url, &token);
+                        continue;
+                    }
+                }
+            }
+            let preview = clean_html_text(&html);
+            let preview = preview.trim();
+            let summary = preview.chars().take(100).collect::<String>();
+            let summary = if summary.is_empty() { "（空页面）".to_string() } else { summary };
+            return Err(format!("未找到确认页的删除链接，未执行最终删除请求。页面内容：{}", summary));
+        };
+        let second = client.get(&confirm)
+            .header(COOKIE, cookie)
+            .header(USER_AGENT, ua)
+            .header(REFERER, format!("https://weibo.cn/{uid}/profile"))
+            .header(ACCEPT, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .send().await.map_err(|e| format!("发送最终删除请求失败：{e}"))?;
+        if second.status().as_u16() == 401 || second.status().as_u16() == 403 {
+            return Err(format!("HTTP {}：登录失效或触发风控", second.status().as_u16()));
+        }
+        if !second.status().is_success() {
+            return Err(format!("删除请求失败，HTTP {}", second.status().as_u16()));
+        }
+        let final_url = second.url().to_string();
+        let body = second.text().await.map_err(|e| format!("读取删除结果失败：{e}"))?;
+        if final_url.contains(&format!("/{uid}/profile")) || body.matches(">删除</a>").count() >= 2 {
+            return Ok(());
+        }
+        return Err("响应页面无法确认删除成功，按失败记录以避免误报".into());
+    }
+    Err("刷新删除令牌后仍未能确认删除".into())
+}
+
+#[tauri::command]
+pub async fn set_delete_task_paused(task_id:u64,paused:bool,app:AppHandle,control:State<'_,DeleteSearchControl>)->Result<String,String>{
+ let active_task_id = control.active_task_id.load(Ordering::Acquire);
+ if active_task_id != task_id {
+   if !paused {
+     return Ok(load_delete_task(&app, task_id)?.state);
+   }
+   let mut task = load_delete_task(&app, task_id)?;
+   if task.state != "已完成" && task.state != "失败" {
+     task.state = "已暂停".into();
+     task.detail = format!("已暂停，已处理 {}/{} 条", task.results.len(), task.post_ids.len());
+     save_delete_task(&app, &task)?;
+     let _ = app.emit("delete-task-updated", task.clone());
+   }
+   return Ok(task.state);
+ }
+ control.task_paused.store(paused, Ordering::Release);
+ if !paused { return Ok("执行中".into()); }
+ while control.task_running.load(Ordering::Acquire)
+   && control.active_task_id.load(Ordering::Acquire) == task_id {
+   let stopped = control.task_stopped_notify.notified();
+   if !control.task_running.load(Ordering::Acquire)
+     || control.active_task_id.load(Ordering::Acquire) != task_id {
+     break;
+   }
+   stopped.await;
+ }
+ let mut task = load_delete_task(&app, task_id)?;
+ if task.state != "已完成" && task.state != "失败" {
+   task.state = "已暂停".into();
+   task.detail = format!("已暂停，已处理 {}/{} 条", task.results.len(), task.post_ids.len());
+   save_delete_task(&app, &task)?;
+   let _ = app.emit("delete-task-updated", task.clone());
+ }
+ Ok(task.state)
+}
+#[tauri::command]
+pub fn set_delete_task_cancelled(cancelled:bool,control:State<'_,DeleteSearchControl>){control.task_cancelled.store(cancelled,Ordering::Relaxed);if cancelled{control.task_paused.store(false,Ordering::Relaxed);}}
+#[tauri::command]
+pub async fn execute_delete_task(task_id:u64,app:AppHandle,store:State<'_,SessionStore>,control:State<'_,DeleteSearchControl>,execution_gate:State<'_,crate::task_execution::TaskExecutionGate>)->Result<DeleteTask,String>{
+ if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
+ if control.task_running.compare_exchange(false,true,Ordering::AcqRel,Ordering::Acquire).is_err() {
+     return Err("已有删除任务正在执行，请等待当前任务结束。".into());
+ }
+ control.task_cancelled.store(false,Ordering::Release);
+ control.task_paused.store(false,Ordering::Release);
+ control.active_task_id.store(task_id, Ordering::Release);
+ let _execution_guard = TaskExecutionGuard {
+     running: &control.task_running,
+     active_task_id: Some(&control.active_task_id),
+     stopped_notify: Some(&control.task_stopped_notify),
+ };
+ let _execution_permit = execution_gate.acquire().await?;
+ if control.cookie_removal.load(Ordering::Acquire) { return Err("正在删除 Cookie，请稍后重试。".into()); }
+ if control.task_cancelled.load(Ordering::Acquire) { return Err("删除任务已停止。".into()); }
+ let result = execute_delete_task_inner(task_id, app.clone(), &store, &control).await;
+ if let Err(error) = &result {
+   if let Ok(mut task) = load_delete_task(&app, task_id) {
+     if task.state != "已完成" && task.state != "已暂停" && !error.contains("该删除任务已经在执行") {
+       task.state = "失败".into();
+       task.detail = error.to_string();
+       if save_delete_task(&app, &task).is_ok() { let _ = app.emit("delete-task-updated", task); }
+     }
+   }
+ }
+ result
+}
+
+async fn execute_delete_task_inner(task_id:u64,app:AppHandle,store:&SessionStore,control:&DeleteSearchControl)->Result<DeleteTask,String>{
+let mut task=load_delete_task(&app,task_id)?;if task.post_ids.is_empty(){return Err("任务中没有可删除的微博 ID。".into());}if task.state=="执行中"{return Err("该删除任务已经在执行。".into());}if task.state=="已完成"{return Err("该任务已完成，不能重复执行。".into());}
+ let cookie=match store.cookie() {
+   Ok(cookie)=>cookie,
+   Err(error)=>{ task.state="失败".into(); task.detail=error.clone(); save_delete_task(&app,&task)?; let _=app.emit("delete-task-updated",task.clone()); return Err(error); }
+ };
+ match check_cookie_availability(&cookie).await {
+   Ok(state) if state=="valid" => {},
+   Ok(_) => { let error="Cookie 已失效，请重新登录微博后再执行删除任务。".to_string(); task.state="失败".into(); task.detail=error.clone(); save_delete_task(&app,&task)?; let _=app.emit("delete-task-updated",task.clone()); return Err(error); },
+   Err(error) => { task.state="失败".into(); task.detail=error.clone(); save_delete_task(&app,&task)?; let _=app.emit("delete-task-updated",task.clone()); return Err(error); }
+ }
+ if control.task_cancelled.load(Ordering::Acquire) { return Err("删除任务已停止。".into()); }
+ if control.task_paused.load(Ordering::Acquire) {
+   task.state="已暂停".into(); task.detail="已暂停，尚未发送删除请求".into();
+   save_delete_task(&app,&task)?; let _=app.emit("delete-task-updated",task.clone()); return Ok(task);
+ }
+ let client=reqwest::Client::builder().timeout(std::time::Duration::from_secs(25)).build().map_err(|e|format!("初始化删除请求失败：{e}"))?;
+ let config=client.get("https://m.weibo.cn/api/config").header(COOKIE,cookie.as_str()).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(ACCEPT,"application/json, text/plain, */*").send().await.map_err(|e|format!("验证微博会话失败：{e}"))?;
+ if !config.status().is_success(){return Err(format!("验证微博会话失败，HTTP {}",config.status().as_u16()));}let json:Value=config.json().await.map_err(|e|format!("解析微博账号信息失败：{e}"))?;
+ let uid=json.pointer("/data/uid").and_then(Value::as_u64).map(|v|v.to_string()).or_else(||json.pointer("/data/uid").and_then(Value::as_str).map(str::to_string)).filter(|v|!v.is_empty()&&v!="0").ok_or_else(||"无法识别当前微博 UID，未执行删除。".to_string())?;
+ let retry=task.state=="失败"||task.state=="已暂停";let successful:std::collections::HashSet<String>=task.results.iter().filter(|r|r.state=="已删除").map(|r|r.post_id.clone()).collect();
+ let mut claimed=std::collections::HashSet::new();
+ {
+   let db=db_connection(&app)?;
+   let mut statement=db.prepare("SELECT id, detail FROM tasks WHERE kind='删除' AND id<>?1 AND state IN ('未开始','排队中','执行中','暂停中','已暂停','失败')")
+     .map_err(|e|format!("执行前检查重复微博失败：{e}"))?;
+   let rows=statement.query_map(params![task.id.to_string()],|row|Ok(row.get::<_,String>(1)?))
+     .map_err(|e|format!("读取其他删除任务失败：{e}"))?;
+   for row in rows {
+     let json=row.map_err(|e|format!("读取其他删除任务失败：{e}"))?;
+     if let Ok(other)=serde_json::from_str::<DeleteTask>(&json){claimed.extend(other.post_ids);}
+   }
+ }
+ let mut targets:Vec<String>=if retry{task.post_ids.iter().filter(|id|!successful.contains(*id)).cloned().collect()}else{task.post_ids.clone()};
+ if !retry { task.results.clear(); }
+ let overlaps:Vec<String>=targets.iter().filter(|id|claimed.contains(*id)).cloned().collect();
+ targets.retain(|id|!claimed.contains(id));
+ for id in overlaps {
+   task.results.retain(|result|result.post_id!=id);
+   task.results.push(DeletePostResult{post_id:id,state:"跳过重复".into(),detail:"该微博已存在于其他未完成删除任务，本次跳过；重试时会再次检查".into()});
+ }
+ if targets.is_empty() {
+   task.state="失败".into();
+   task.progress=((task.results.len()*100)/task.post_ids.len()).min(100) as u8;
+   task.detail="本次没有可执行的微博：全部项目均已成功删除或与其他未完成任务重叠".into();
+   save_delete_task(&app,&task)?;
+   let _=app.emit("delete-task-updated",task.clone());
+   return Ok(task);
+ }
+ let mut id_to_bid=std::collections::HashMap::new();let mut wanted=std::collections::HashSet::new();for id in &targets{let bid=numeric_id_to_bid(id).ok_or_else(||format!("微博 ID 格式无效：{id}"))?;wanted.insert(bid.clone());id_to_bid.insert(id.clone(),bid);}
+ task.state="执行中".into();task.progress=((successful.len()*100)/task.post_ids.len()).min(100)as u8;task.detail=format!("正在查找本人微博删除链接，待处理 {} 条",targets.len());
+ save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());let mut urls=std::collections::HashMap::new();
+ for page in 1..=500{if !wait_delete_resume(&control).await{break;}let response=client.get(format!("https://weibo.cn/{uid}/profile?page={page}")).header(COOKIE,&cookie).header(USER_AGENT,"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").header(REFERER,"https://weibo.cn/").send().await.map_err(|e|format!("读取本人微博删除链接失败：{e}"))?;
+ if response.status().as_u16()==401||response.status().as_u16()==403{task.state="失败".into();task.detail=format!("读取本人微博主页被拒绝（HTTP {}），尚未执行删除",response.status().as_u16());save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());return Ok(task);}
+ if !response.status().is_success(){return Err(format!("读取本人微博主页失败，HTTP {}",response.status().as_u16()));}let html=response.text().await.map_err(|e|format!("读取本人微博主页内容失败：{e}"))?;urls.extend(links_for_ids(&html,&wanted));if urls.len()>=wanted.len()||!html.contains("删除"){break;}task_sleep(crate::settings::request_delay_ms(&app)).await;}
+ for id in targets{if !wait_delete_resume(&control).await{break;}let outcome=match id_to_bid.get(&id).and_then(|bid|urls.get(bid)){Some(url)=>delete_one(&client,url,&uid,&cookie).await,None=>Err("未在本人微博主页中找到该微博的删除链接，未发送删除请求".into())};
+ let (state,detail)=match outcome{Ok(())=>("已删除".to_string(),"已收到可确认的删除成功页面".to_string()),Err(e)=>("失败".to_string(),e)};let fatal=detail.contains("HTTP 401")||detail.contains("HTTP 403")||detail.contains("风控");
+ task.results.retain(|r|r.post_id!=id);task.results.push(DeletePostResult{post_id:id,state,detail});task.progress=((task.results.len()*100)/task.post_ids.len()).min(100)as u8;let ok=task.results.iter().filter(|r|r.state=="已删除").count();let failed=task.results.iter().filter(|r|r.state=="失败").count();task.detail=format!("已处理 {}/{} 条；成功 {} 条，失败 {} 条",task.results.len(),task.post_ids.len(),ok,failed);
+ save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());if fatal{break;}task_sleep(crate::settings::request_delay_ms(&app)).await;}
+ if control.task_cancelled.load(Ordering::Relaxed){task.state="失败".into();task.detail=format!("任务已停止，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if control.task_paused.load(Ordering::Acquire){task.state="已暂停".into();task.detail=format!("已暂停，已处理 {}/{} 条",task.results.len(),task.post_ids.len());}else if task.results.iter().any(|r|r.state=="失败")||task.results.len()<task.post_ids.len(){task.state="失败".into();}else{task.state="已完成".into();}
+ save_delete_task(&app,&task)?;let _=app.emit("delete-task-updated",task.clone());Ok(task)
+}
+
+#[tauri::command]
+pub fn remove_delete_tasks(
+    task_ids: Vec<u64>,
+    app: AppHandle,
+    control: State<'_, DeleteSearchControl>,
+) -> Result<Vec<u64>, String> {
+    if task_ids.is_empty() { return Err("请先选择要删除的任务。".into()); }
+    let mut db = db_connection(&app)?;
+    // 如果所选任务正在执行，先请求取消并解除暂停，等后端停止后再删除记录。
+    let active_task_id = control.active_task_id.load(Ordering::Acquire);
+    let mut active_selected = active_task_id != 0 && task_ids.contains(&active_task_id);
+    // 只有当前没有活动任务 ID 时，才把数据库里的执行中状态当作上次异常退出留下的旧状态。
+    if active_task_id == 0 {
+        for task_id in &task_ids {
+            let state = db.query_row(
+                "SELECT state FROM tasks WHERE id=?1 AND kind='删除'",
+                params![task_id.to_string()],
+                |row| row.get::<_, String>(0),
+            ).optional().map_err(|e| format!("读取任务状态失败：{e}"))?;
+            if matches!(state.as_deref(), Some("执行中" | "已暂停")) {
+                active_selected = true;
+                break;
+            }
+        }
+    }
+    if active_selected {
+        control.task_cancelled.store(true, Ordering::Release);
+        control.task_paused.store(false, Ordering::Release);
+        while control.task_running.load(Ordering::Acquire) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        control.task_cancelled.store(false, Ordering::Release);
+    }
+    // 取消结束后重新取得互斥标记，避免删除记录与另一个任务启动并发。
+    if control.task_running.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+        return Err("有删除任务正在执行，请稍后重试删除。".into());
+    }
+    let _execution_guard = TaskExecutionGuard {
+        running: &control.task_running,
+        active_task_id: None,
+        stopped_notify: Some(&control.task_stopped_notify),
+    };
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(|e| format!("无法锁定任务数据库：{e}"))?;
+    let mut unique_ids = std::collections::HashSet::new();
+    let mut removed_ids = Vec::new();
+    for task_id in task_ids {
+        if !unique_ids.insert(task_id) { continue; }
+        let state = tx.query_row(
+            "SELECT state FROM tasks WHERE id=?1 AND kind='删除'",
+            params![task_id.to_string()],
+            |row| row.get::<_, String>(0),
+        ).optional().map_err(|e| format!("读取任务状态失败：{e}"))?;
+        if state.is_none() { continue; }
+        let changed = tx.execute(
+            "DELETE FROM tasks WHERE id=?1 AND kind='删除'",
+            params![task_id.to_string()],
+        ).map_err(|e| format!("删除任务 #{} 失败：{e}", task_id))?;
+        if changed > 0 { removed_ids.push(task_id); }
+    }
+    tx.commit().map_err(|e| format!("提交任务删除失败：{e}"))?;
+    Ok(removed_ids)
+}
+
+#[tauri::command]
+pub fn get_delete_tasks(app: AppHandle) -> Result<Vec<DeleteTask>, String> {
+    let db = db_connection(&app)?;
+    let mut statement = db.prepare("SELECT detail FROM tasks WHERE kind = '删除' ORDER BY created_at DESC")
+        .map_err(|e| format!("读取删除任务失败：{e}"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| format!("查询删除任务失败：{e}"))?;
+    let mut tasks = Vec::new();
+    for row in rows {
+        let serialized = row.map_err(|e| format!("读取删除任务记录失败：{e}"))?;
+        if let Ok(task) = serde_json::from_str::<DeleteTask>(&serialized) { tasks.push(task); }
+    }
+    Ok(tasks)
+}
