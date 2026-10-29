@@ -1,0 +1,74 @@
+name: Build Weibo Manager
+
+# 测试构建：任意分支可手动运行，不修改版本号，只上传 Artifacts。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weibo-manager-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+            artifact: weibo-manager-windows
+            path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          - name: macOS Apple Silicon
+            os: macos-14
+            target: aarch64-apple-darwin
+            bundles: dmg
+            artifact: weibo-manager-macos-applesilicon
+            path: src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          - name: macOS Intel
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+            artifact: weibo-manager-macos-intel
+            path: src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.0.0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Generate platform icons
+        run: pnpm tauri icon src-tauri/icons/logo.svg
+
+      - name: Build installer
+        run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}-${{ github.ref_name }}-${{ github.sha }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error
+          retention-days: 14
