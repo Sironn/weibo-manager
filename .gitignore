@@ -1,0 +1,16 @@
+# 依赖与构建产物
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+
+# 本地打包输出
+*.dmg
+*.app/
+*.msi
+*.deb
+*.AppImage
+
+# 其他
+.DS_Store
+*.log

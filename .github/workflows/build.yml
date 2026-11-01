@@ -25,7 +25,7 @@ jobs:
             artifact: weibo-manager-windows
             path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
           - name: macOS Apple Silicon
-            os: macos-14
+            os: macos-15
             target: aarch64-apple-darwin
             bundles: dmg
             artifact: weibo-manager-macos-applesilicon
@@ -60,7 +60,13 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Generate platform icons
-        run: pnpm tauri icon src-tauri/icons/logo.svg
+        shell: bash
+        run: |
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            pnpm tauri icon src-tauri/icons/logo-win.svg
+          else
+            pnpm tauri icon src-tauri/icons/logo.svg
+          fi
 
       - name: Build installer
         run: pnpm tauri build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}

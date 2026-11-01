@@ -1,10 +1,11 @@
 use crate::{auth::SessionStore, logger::write_log, settings};
 use chrono::DateTime;
+use futures_util::StreamExt;
 use reqwest::header::{ACCEPT, COOKIE, REFERER, USER_AGENT};
 use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::{Duration, SystemTime, UNIX_EPOCH}};
+use std::{collections::HashMap, fs, io::Write, path::{Path, PathBuf}, sync::{Arc, Mutex}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 #[cfg(target_os = "windows")]
@@ -333,6 +334,7 @@ struct DownloadProgress {
     total: usize,
     media_id: String,
     phase: String,
+    percent: u8,
     detail: String,
 }
 
@@ -375,17 +377,6 @@ fn user_id_from_input(input: &str) -> Result<String, String> {
 fn parse_post_time(raw: &str) -> Option<String> {
     DateTime::parse_from_str(raw, "%a %b %d %H:%M:%S %z %Y").ok()
         .map(|value| value.format("%Y-%m-%d %H:%M:%S").to_string())
-        .or_else(|| {
-            let s = raw.trim();
-            if s.len() >= 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-') {
-                Some(s[..10].to_string())
-            } else { None }
-        })
-}
-
-fn parse_post_date(raw: &str) -> Option<String> {
-    DateTime::parse_from_str(raw, "%a %b %d %H:%M:%S %z %Y").ok()
-        .map(|value| value.format("%Y-%m-%d").to_string())
         .or_else(|| {
             let s = raw.trim();
             if s.len() >= 10 && s.as_bytes().get(4) == Some(&b'-') && s.as_bytes().get(7) == Some(&b'-') {
@@ -614,7 +605,7 @@ pub async fn download_media(
                     let media_id = url::Url::parse(&url).ok().and_then(|parsed| parsed.path_segments().and_then(|segments| segments.filter(|part| !part.is_empty()).last().map(str::to_string))).unwrap_or_default();
                     let _ = app.emit("download-progress", DownloadProgress {
                         task_id, user: display_name.clone(), completed: downloaded + skipped + failed, total: 0,
-                        media_id: media_id.clone(), phase: "downloading".into(),
+                        media_id: media_id.clone(), phase: "downloading".into(), percent: 0,
                         detail: if media_id.is_empty() { "正在下载媒体".into() } else { format!("正在下载 媒体文件 {media_id}") },
                     });
                     let result = client.get(&url).header(REFERER, "https://m.weibo.cn/")
@@ -622,28 +613,73 @@ pub async fn download_media(
                         .send().await;
                     match result {
                         Ok(response) if response.status().is_success() => {
-                            match response.bytes().await {
-                                Ok(bytes) if !bytes.is_empty() => {
-                                    if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|e| format!("创建媒体目录失败：{e}"))?; }
-                                    if let Err(e) = fs::write(&target, &bytes) {
-                                        failed += 1;
-                                        let _ = write_log(&app, "ERROR", "download", &format!("保存媒体文件失败：{e}"));
-                                        continue;
-                                    }
-                                    downloaded += 1;
-                                    if modify_file_time {
-                                        let post_time_value = post.get("created_at").and_then(Value::as_str).and_then(|raw| DateTime::parse_from_str(raw, "%a %b %d %H:%M:%S %z %Y").ok());
-                                        if let Some(timestamp) = post_time_value {
-                                            match apply_file_times(&target, &timestamp) {
-                                                Ok(message) => { let _ = write_log(&app, "INFO", "download", &format!("微博文件时间处理结果：{message}")); }
-                                                Err(error) => { let _ = write_log(&app, "WARN", "download", &format!("设置微博文件时间失败，保留系统支持的默认值：{error}")); }
-                                            }
+                            if let Some(parent) = target.parent() { fs::create_dir_all(parent).map_err(|e| format!("创建媒体目录失败：{e}"))?; }
+                            let total_bytes = response.content_length().unwrap_or(0);
+                            let mut output = match fs::File::create(&target) {
+                                Ok(file) => file,
+                                Err(error) => {
+                                    failed += 1;
+                                    let _ = write_log(&app, "ERROR", "download", &format!("创建媒体文件失败：{error}"));
+                                    continue;
+                                }
+                            };
+                            // 按单个媒体文件统计进度：每个文件从 0% 走到 100%，下一个文件重新开始。
+                            let mut written: u64 = 0;
+                            let mut last_emit = Instant::now();
+                            let mut failure: Option<String> = None;
+                            let mut stream = response.bytes_stream();
+                            while let Some(chunk) = stream.next().await {
+                                match chunk {
+                                    Ok(bytes) if !bytes.is_empty() => {
+                                        if let Err(error) = output.write_all(&bytes) {
+                                            failure = Some(format!("保存媒体文件失败：{error}"));
+                                            break;
+                                        }
+                                        written += bytes.len() as u64;
+                                        let percent = if total_bytes > 0 {
+                                            (written.saturating_mul(100) / total_bytes).min(99) as u8
                                         } else {
-                                            let _ = write_log(&app, "WARN", "download", "微博接口未返回可解析的完整发布时间，文件时间保留系统时间");
+                                            0
+                                        };
+                                        if last_emit.elapsed() >= Duration::from_millis(120) {
+                                            last_emit = Instant::now();
+                                            let _ = app.emit("download-progress", DownloadProgress {
+                                                task_id, user: display_name.clone(), completed: downloaded + skipped + failed, total: 0,
+                                                media_id: media_id.clone(), phase: "downloading".into(), percent,
+                                                detail: format!("正在下载 单个文件 {percent}%"),
+                                            });
                                         }
                                     }
+                                    Ok(_) => {}
+                                    Err(error) => {
+                                        failure = Some(format!("媒体请求失败：{error}"));
+                                        break;
+                                    }
                                 }
-                                _ => failed += 1,
+                            }
+                            drop(output);
+                            if let Some(message) = failure {
+                                let _ = fs::remove_file(&target);
+                                failed += 1;
+                                let _ = write_log(&app, "WARN", "download", &format!("{message}，类型 {kind}"));
+                                continue;
+                            }
+                            if written == 0 {
+                                let _ = fs::remove_file(&target);
+                                failed += 1;
+                                continue;
+                            }
+                            downloaded += 1;
+                            if modify_file_time {
+                                let post_time_value = post.get("created_at").and_then(Value::as_str).and_then(|raw| DateTime::parse_from_str(raw, "%a %b %d %H:%M:%S %z %Y").ok());
+                                if let Some(timestamp) = post_time_value {
+                                    match apply_file_times(&target, &timestamp) {
+                                        Ok(message) => { let _ = write_log(&app, "INFO", "download", &format!("微博文件时间处理结果：{message}")); }
+                                        Err(error) => { let _ = write_log(&app, "WARN", "download", &format!("设置微博文件时间失败，保留系统支持的默认值：{error}")); }
+                                    }
+                                } else {
+                                    let _ = write_log(&app, "WARN", "download", "微博接口未返回可解析的完整发布时间，文件时间保留系统时间");
+                                }
                             }
                         }
                         Ok(response) => {
@@ -657,7 +693,7 @@ pub async fn download_media(
                     }
                     let _ = app.emit("download-progress", DownloadProgress {
                         task_id, user: display_name.clone(), completed: downloaded + skipped + failed, total: 0,
-                        media_id, phase: "completed".into(),
+                        media_id, phase: "completed".into(), percent: 100,
                         detail: format!("已下载 {downloaded}，跳过 {skipped}，失败 {failed}"),
                     });
                 }

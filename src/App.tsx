@@ -70,6 +70,16 @@ function App() {
   const activeDeleteSearchGeneration = useRef<number | null>(null);
   // 即使 UI 已显示取消，也等旧 Tauri 命令退出后才允许启动下一次搜索。
   const deleteSearchInFlight = useRef(false);
+  // 逐条展示缓冲：后端一页返回 10 条时事件会同时到达，这里按固定间隔逐条追加以呈现实时出现的效果。
+  const pendingPostQueue = useRef<{ post: WeiboPost; searchId: number }[]>([]);
+  const pendingPostTimer = useRef<number | null>(null);
+  const clearPendingPosts = () => {
+    pendingPostQueue.current = [];
+    if (pendingPostTimer.current !== null) {
+      window.clearInterval(pendingPostTimer.current);
+      pendingPostTimer.current = null;
+    }
+  };
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsError, setPostsError] = useState("");
   const [cookieValidity, setCookieValidity] = useState<"unknown" | "checking" | "valid" | "invalid">("unknown");
@@ -157,6 +167,7 @@ function App() {
     deleteSearchGeneration.current += 1;
     activeDeleteSearchGeneration.current = null;
     acceptDeletePostEvents.current = false;
+    clearPendingPosts();
     setPostsLoading(false);
     setPosts([]);
     setPostChecks({});
@@ -257,6 +268,7 @@ function App() {
     acceptDeletePostEvents.current = true;
     setPostsLoading(true); setPostsError(""); setPostsPaused(false); setPostsCancelling(false);
     log("info", "delete", `开始搜索微博，起始日期：${fromDate || "不限"}`);
+    clearPendingPosts();
     setPosts([]); setPostChecks({});
     try {
       const savedCookie = await invoke<string | null>("get_weibo_cookie");
@@ -283,7 +295,9 @@ function App() {
       setPosts(current => {
         if (!isCurrentSearch()) return current;
         const merged = new Map(current.map(post => [post.id, post]));
-        result.forEach(post => merged.set(post.id, post));
+        // 已在逐条展示队列中的微博稍后单独追加，避免这里一次性补齐打乱逐条出现的节奏。
+        const queued = new Set(pendingPostQueue.current.map(item => item.post.id));
+        result.forEach(post => { if (!queued.has(post.id)) merged.set(post.id, post); });
         return [...merged.values()];
       });
       log("info", "delete", `微博搜索完成，后端返回 ${result.length} 条结果`);
@@ -332,6 +346,7 @@ function App() {
     deleteSearchGeneration.current += 1;
     activeDeleteSearchGeneration.current = null;
     acceptDeletePostEvents.current = false;
+    clearPendingPosts();
     setPostsLoading(false);
     setPostsCancelling(true);
     setPostsPaused(false);
@@ -362,10 +377,11 @@ function App() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    void listen<{ taskId: number; user: string; completed: number; total: number; mediaId: string; phase: string; detail: string }>("download-progress", event => {
+    void listen<{ taskId: number; user: string; completed: number; total: number; mediaId: string; phase: string; percent: number; detail: string }>("download-progress", event => {
       const progress = event.payload;
+      // 下载任务按单个媒体文件的进度展示：当前文件下载完显示 100%，下一个文件从 0% 重新开始。
       setTasks(current => current.map(task => task.kind === "下载" && task.id === progress.taskId && task.state === "执行中"
-        ? { ...task, progress: progress.total > 0 ? Math.min(99, Math.round(progress.completed / progress.total * 100)) : task.progress, detail: progress.phase === "downloading" ? progress.detail : `${progress.user}：${progress.detail}` }
+        ? { ...task, progress: progress.phase === "completed" ? 100 : (progress.percent ?? task.progress), detail: progress.phase === "downloading" ? progress.detail : `${progress.user}：${progress.detail}` }
         : task));
       setDownloadStatus(`${progress.user}：${progress.detail}`);
     }).then(stop => { if (disposed) stop(); else unlisten = stop; }).catch(reason => {
@@ -429,16 +445,24 @@ function App() {
       }
       const post = candidate as WeiboPost;
       log("info", "delete", `前端已收到逐条展示事件，微博 ID=${post.id}，正文长度=${typeof post.text === "string" ? post.text.length : "无效"}`);
-      setPosts(current => {
-        if (!acceptDeletePostEvents.current || activeDeleteSearchGeneration.current !== eventSearchId) return current;
-        if (current.some(item => item.id === post.id)) {
-          log("debug", "delete", `收到重复微博事件，跳过追加，微博 ID=${post.id}，当前数量=${current.length}`);
-          return current;
-        }
-        const next = [...current, post];
-        log("debug", "delete", `已将事件微博追加到前端状态，微博 ID=${post.id}，数量：${current.length} -> ${next.length}`);
-        return next;
-      });
+      if (pendingPostQueue.current.some(item => item.post.id === post.id)) {
+        log("debug", "delete", `事件微博已在待展示队列中，跳过，微博 ID=${post.id}`);
+        return;
+      }
+      pendingPostQueue.current.push({ post, searchId: eventSearchId });
+      if (pendingPostTimer.current === null) {
+        pendingPostTimer.current = window.setInterval(() => {
+          const next = pendingPostQueue.current.shift();
+          if (!next) {
+            if (pendingPostTimer.current !== null) window.clearInterval(pendingPostTimer.current);
+            pendingPostTimer.current = null;
+            return;
+          }
+          // 只校验代次而不依赖“搜索进行中”标记：搜索命令已返回时仍要把队列里剩下的微博逐条补齐，否则最后一批会被合并逻辑跳过而丢失。
+          if (!acceptDeletePostEvents.current || deleteSearchGeneration.current !== next.searchId) return;
+          setPosts(current => current.some(item => item.id === next.post.id) ? current : [...current, next.post]);
+        }, 120);
+      }
     }).then(stop => {
       if (disposed) {
         stop();
@@ -452,6 +476,7 @@ function App() {
     });
     return () => {
       disposed = true;
+      clearPendingPosts();
       if (unlisten) {
         unlisten();
         log("info", "delete", "微博逐条展示事件监听器已清理");
@@ -874,7 +899,7 @@ function App() {
         <td className="task-title-cell"><span className="icon-tooltip task-title-tooltip" data-tooltip={task.title}><strong>{task.title}</strong></span><small>任务 #{task.id}</small></td>
         <td>{task.kind === "下载" ? <span className="tag blue">下载</span> : <span className="tag amber">删除</span>}</td>
         <td><TaskBadge state={task.state}/></td>
-        <td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/></div><small>{task.progress}%</small></div></td>
+        <td><div className="table-progress"><div className="progress-track"><div style={{width: `${task.progress}%`}}/><span className="progress-label">{task.progress}%</span></div></div></td>
         <td><span className="icon-tooltip task-detail-tooltip" data-tooltip={task.kind === "删除" && task.state === "未开始" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}><span className="task-detail-cell">{task.kind === "删除" && task.state === "未开始" ? "待确认 " + (task.postIds?.length ?? 0) + " 条微博" : task.detail}</span></span></td>
         <td><div className="account-actions task-operation-actions">
           {task.kind === "删除" && task.state === "执行中" && <button className="icon-button task-action-icon icon-tooltip" data-tooltip="暂停删除" aria-label="暂停删除" onClick={() => void pauseDeleteTask(task)}><Pause size={16} fill="currentColor" strokeWidth={2.5}/></button>}
