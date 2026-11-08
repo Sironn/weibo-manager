@@ -130,13 +130,95 @@ fn has_login_cookie(cookie: &str) -> bool {
         })
 }
 
+/// 取不到昵称时显示的占位文案；它不代表真实账号资料。
+const PLACEHOLDER_SCREEN_NAME: &str = "微博会话已获取";
+
 fn account_for_acquired_session() -> WeiboAccount {
     WeiboAccount {
-        // 账号资料不再作为登录门槛；后续真实接口可在成功响应中补充 UID 和昵称。
+        // 账号资料只用于界面展示，不作为登录门槛。
         uid: String::new(),
-        screen_name: "微博会话已获取".to_string(),
+        screen_name: PLACEHOLDER_SCREEN_NAME.to_string(),
         avatar_url: None,
     }
+}
+
+/// 判断账号资料是否仍是占位值（尚未取到真实昵称）。
+fn is_placeholder_account(account: &WeiboAccount) -> bool {
+    account.uid.trim().is_empty()
+        || account.screen_name.trim().is_empty()
+        || account.screen_name == PLACEHOLDER_SCREEN_NAME
+}
+
+/// 读取当前登录账号的 UID、昵称与头像。
+/// 先向 m.weibo.cn/api/config 索取 UID，再查该 UID 的资料卡取昵称。
+/// 这是展示用途的附加请求，失败时调用方保留占位文案，不影响登录态本身。
+async fn fetch_account_profile(cookie: &str) -> Result<WeiboAccount, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("创建账号资料请求失败：{error}"))?;
+
+    let config: serde_json::Value = client
+        .get("https://m.weibo.cn/api/config")
+        .header(COOKIE, cookie)
+        .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36")
+        .header(ACCEPT, "application/json, text/plain, */*")
+        .header("referer", "https://m.weibo.cn/")
+        .header("x-requested-with", "XMLHttpRequest")
+        .send()
+        .await
+        .map_err(|error| format!("读取登录账号标识失败：{error}"))?
+        .error_for_status()
+        .map_err(|error| format!("读取登录账号标识失败：{error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("解析登录账号标识失败：{error}"))?;
+
+    let uid = config
+        .pointer("/data/uid")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if uid.is_empty() {
+        return Err("登录响应里没有账号标识，无法读取昵称。".into());
+    }
+
+    let profile: serde_json::Value = client
+        .get(format!("https://m.weibo.cn/api/container/getIndex?type=uid&value={uid}"))
+        .header(COOKIE, cookie)
+        .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36")
+        .header(ACCEPT, "application/json, text/plain, */*")
+        .header("referer", format!("https://m.weibo.cn/u/{uid}"))
+        .header("x-requested-with", "XMLHttpRequest")
+        .send()
+        .await
+        .map_err(|error| format!("读取账号资料失败：{error}"))?
+        .error_for_status()
+        .map_err(|error| format!("读取账号资料失败：{error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("解析账号资料失败：{error}"))?;
+
+    let info = profile
+        .pointer("/data/userInfo")
+        .ok_or_else(|| "账号资料里没有用户信息。".to_string())?;
+    let screen_name = info
+        .get("screen_name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if screen_name.is_empty() {
+        return Err("账号资料里没有昵称。".into());
+    }
+    let avatar_url = info
+        .get("avatar_hd")
+        .and_then(|value| value.as_str())
+        .or_else(|| info.get("profile_image_url").and_then(|value| value.as_str()))
+        .map(str::to_owned);
+
+    Ok(WeiboAccount { uid, screen_name, avatar_url })
 }
 
 fn validate_imported_cookie_format(cookie: &str) -> Result<(), String> {
@@ -248,7 +330,10 @@ pub async fn finish_qr_login(
         return Err("尚未读取到有效的 m.weibo.cn / weibo.cn 登录 Cookie，请确认扫码登录已完成。".into());
     }
 
-    let account = account_for_acquired_session();
+    // 昵称只用于界面展示，取不到时退回占位文案，不影响登录成功。
+    let account = fetch_account_profile(&cookie)
+        .await
+        .unwrap_or_else(|_| account_for_acquired_session());
     persist_cookie(&app, Some(&cookie))?;
     {
         let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
@@ -281,8 +366,10 @@ pub async fn import_weibo_cookie(
     }
     validate_imported_cookie_format(&cookie)?;
 
-    // 导入时不请求固定资料接口。Cookie 的实际可用性由后续 m.weibo.cn 下载响应判断。
-    let account = account_for_acquired_session();
+    // 导入同样尝试读取昵称；失败时只影响展示，Cookie 仍然保存。
+    let account = fetch_account_profile(&cookie)
+        .await
+        .unwrap_or_else(|_| account_for_acquired_session());
     persist_cookie(&app, Some(&cookie))?;
     let mut current = store.0.lock().map_err(|_| "认证状态锁定失败，请重启应用后重试。".to_string())?;
     *current = Some(ActiveSession {
@@ -348,10 +435,32 @@ pub async fn check_weibo_cookie(store: State<'_, SessionStore>) -> Result<String
 }
 
 /// 只向前端返回账号状态，不返回 Cookie 本身。
+/// 启动时恢复的会话只有 Cookie、没有账号资料，这里补取一次昵称并写回内存，
+/// 避免界面长期显示占位文案。
 #[tauri::command]
-pub fn get_weibo_account(store: State<'_, SessionStore>) -> Result<Option<WeiboAccount>, String> {
-    let current = store.0.lock().map_err(|_| "读取认证状态失败，请重启应用后重试。".to_string())?;
-    Ok(current.as_ref().map(|session| session.account.clone()))
+pub async fn get_weibo_account(store: State<'_, SessionStore>) -> Result<Option<WeiboAccount>, String> {
+    let snapshot = {
+        let current = store.0.lock().map_err(|_| "读取认证状态失败，请重启应用后重试。".to_string())?;
+        current.as_ref().map(|session| (session.cookie.clone(), session.account.clone()))
+    };
+    let Some((cookie, account)) = snapshot else { return Ok(None) };
+    if !is_placeholder_account(&account) {
+        return Ok(Some(account));
+    }
+
+    match fetch_account_profile(&cookie).await {
+        Ok(fresh) => {
+            let mut current = store.0.lock().map_err(|_| "读取认证状态失败，请重启应用后重试。".to_string())?;
+            // 期间若用户换了 Cookie，就不要把旧账号资料写回去。
+            if let Some(session) = current.as_mut() {
+                if session.cookie == cookie {
+                    session.account = fresh.clone();
+                }
+            }
+            Ok(Some(fresh))
+        }
+        Err(_) => Ok(Some(account)),
+    }
 }
 
 #[tauri::command]
@@ -359,10 +468,16 @@ pub async fn delete_weibo_cookie(
     app: AppHandle,
     store: State<'_, SessionStore>,
     control: State<'_, crate::delete::DeleteSearchControl>,
+    unlike_control: State<'_, crate::unlike::UnlikeSearchControl>,
+    comment_control: State<'_, crate::comment::CommentSearchControl>,
+    follow_control: State<'_, crate::follow::FollowSearchControl>,
     download_control: State<'_, crate::download::DownloadControl>,
 ) -> Result<(), String> {
     crate::download::cancel_all_downloads(&download_control);
     crate::delete::begin_cookie_removal(&control).await;
+    crate::unlike::begin_cookie_removal(&unlike_control).await;
+    crate::comment::begin_cookie_removal(&comment_control).await;
+    crate::follow::begin_cookie_removal(&follow_control).await;
     let result = (|| -> Result<(), String> {
         let _ = write_log(&app, "INFO", "auth", "用户请求删除 Cookie 及关联任务");
         let previous_cookie = {
@@ -401,5 +516,8 @@ pub async fn delete_weibo_cookie(
         Ok(())
     })();
     crate::delete::finish_cookie_removal(&control);
+    crate::unlike::finish_cookie_removal(&unlike_control);
+    crate::comment::finish_cookie_removal(&comment_control);
+    crate::follow::finish_cookie_removal(&follow_control);
     result
 }

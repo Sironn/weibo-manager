@@ -21,6 +21,9 @@ pub struct WeiboPost {
     pub kind: String,
     pub text: String,
     pub media: String,
+    /// 转发的原文已被删除（retweeted_status.deleted == 1）。
+    #[serde(default)]
+    pub origin_deleted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,7 +109,12 @@ fn parse_post(mblog: &Value) -> Option<WeiboPost> {
     let has_pics = mblog.get("pics").and_then(Value::as_array).map(|v| !v.is_empty()).unwrap_or(false);
     let page_type = mblog.get("page_info").and_then(|v| v.get("type")).and_then(Value::as_str).unwrap_or("");
     let media = (if has_pics { "图片" } else if page_type == "video" || mblog.get("video").is_some() { "视频" } else { "无媒体" }).to_string();
-    Some(WeiboPost { id, date, created_at, kind, text: post_text(mblog), media })
+    // 原文被删除后，微博把原微博替换成只剩 id/text/deleted 的占位对象，deleted 是唯一可靠信号。
+    let origin_deleted = mblog.get("retweeted_status")
+        .and_then(|origin| origin.get("deleted"))
+        .map(|value| value.as_u64() == Some(1) || value.as_str() == Some("1"))
+        .unwrap_or(false);
+    Some(WeiboPost { id, date, created_at, kind, text: post_text(mblog), media, origin_deleted })
 }
 
 /// 控制列表读取的暂停与取消状态；读取任务在网络请求前后检查这些标记。

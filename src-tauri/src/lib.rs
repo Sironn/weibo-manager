@@ -1,9 +1,12 @@
 mod auth;
+mod comment;
 mod delete;
 mod download;
+mod follow;
 mod logger;
 mod settings;
 mod task_execution;
+mod unlike;
 
 use rusqlite::Connection;
 use std::{fs, path::PathBuf};
@@ -21,6 +24,9 @@ pub fn run() {
             let handle = app.handle().clone();
             let saved_settings = settings::load_startup_settings(&handle);
             app.manage(delete::DeleteSearchControl::default());
+            app.manage(unlike::UnlikeSearchControl::default());
+            app.manage(comment::CommentSearchControl::default());
+            app.manage(follow::FollowSearchControl::default());
             app.manage(download::DownloadControl::default());
             app.manage(task_execution::TaskExecutionGate::default());
             // 启动时从独立配置文件恢复 Cookie；Cookie 不写入日志。
@@ -79,6 +85,34 @@ pub fn run() {
             delete::execute_delete_task,
             delete::set_delete_task_paused,
             delete::set_delete_task_cancelled,
+            unlike::get_like_posts,
+            unlike::set_unlike_search_paused,
+            unlike::set_unlike_search_cancelled,
+            unlike::create_unlike_task,
+            unlike::get_unlike_tasks,
+            unlike::remove_unlike_tasks,
+            unlike::execute_unlike_task,
+            unlike::set_unlike_task_paused,
+            unlike::set_unlike_task_cancelled,
+            comment::get_comment_posts,
+            comment::set_comment_search_paused,
+            comment::set_comment_search_cancelled,
+            comment::create_comment_task,
+            comment::get_comment_tasks,
+            comment::remove_comment_tasks,
+            comment::execute_comment_task,
+            comment::set_comment_task_paused,
+            comment::set_comment_task_cancelled,
+            follow::get_follow_users,
+            follow::get_follow_groups,
+            follow::set_follow_search_paused,
+            follow::set_follow_search_cancelled,
+            follow::create_follow_task,
+            follow::get_follow_tasks,
+            follow::remove_follow_tasks,
+            follow::execute_follow_task,
+            follow::set_follow_task_paused,
+            follow::set_follow_task_cancelled,
             settings::get_config_file_names,
             settings::get_app_settings,
             settings::save_app_setting,
