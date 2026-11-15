@@ -1,4 +1,4 @@
-name: Build Weibo Manager
+name: Build Test
 
 # 测试构建：任意分支可手动运行，不修改版本号，只上传 Artifacts。
 on:

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import DateSegmentInput from "./components/DateSegmentInput";
+import TemplateEditor, { type TemplateEditorHandle } from "./components/TemplateEditor";
 import { listen } from "@tauri-apps/api/event";
 import { initializeLogger, log, updateLoggerEnabled } from "./lib/logger";
 import {
@@ -192,6 +193,9 @@ function App() {
   const [settingSection, setSettingSection] = useState<"general" | "filename">("general");
   const [settingsExpanded, setSettingsExpanded] = useState(false);
   const [templateTarget, setTemplateTarget] = useState<"file" | "folder">("file");
+  // 两个模板编辑器各自持有一个句柄，点击变量时插入到最近聚焦的那个。
+  const folderTemplateRef = useRef<TemplateEditorHandle>(null);
+  const fileTemplateRef = useRef<TemplateEditorHandle>(null);
   const [downloadPath, setDownloadPath] = useState("~/Downloads/WeiboDownloads");
   const [downloadDateFrom, setDownloadDateFrom] = useState("");
   const [downloadDateTo, setDownloadDateTo] = useState("");
@@ -792,6 +796,30 @@ function App() {
     }
   };
   useEffect(() => { scheduleWaitingDownloadRef.current(); }, []);
+
+  // 设置页滚动时，左侧子菜单跟随右侧当前可见的区块切换高亮；滚动发生在 .content 容器内。
+  useEffect(() => {
+    if (page !== "settings") return;
+    const scroller = document.querySelector(".content");
+    if (!scroller) return;
+    let frame = 0;
+    const syncSection = () => {
+      frame = 0;
+      const filenameSection = document.getElementById("settings-filename");
+      if (!filenameSection) return;
+      // 文件命名区块顶部进入内容区上三分之一即视为当前区块。
+      const viewport = scroller.getBoundingClientRect();
+      const threshold = viewport.top + viewport.height * 0.35;
+      setSettingSection(filenameSection.getBoundingClientRect().top <= threshold ? "filename" : "general");
+    };
+    const onScroll = () => { if (!frame) frame = window.requestAnimationFrame(syncSection); };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    syncSection();
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [page]);
   const loadFollowGroups = async () => {
     if (cookieValidity !== "valid" || followGroups.length > 0) return;
     try { setFollowGroups(await invoke<FollowGroup[]>("get_follow_groups")); }
@@ -1779,20 +1807,20 @@ function App() {
           <div className="panel-title"><div><strong>文件与文件夹命名</strong><span>点击变量可插入到当前选中的模板输入框</span></div></div>
           <div className="template-field">
             <Field label="下载文件夹命名模板">
-              <input value={filenameSettings.folderTemplate} onFocus={() => setTemplateTarget("folder")} onChange={e => saveFilenameSettings({...filenameSettings, folderTemplate: e.target.value})} placeholder="%USER_SCREEN_NAME%" />
+              <TemplateEditor ref={folderTemplateRef} value={filenameSettings.folderTemplate} onFocus={() => setTemplateTarget("folder")} onChange={next => saveFilenameSettings({...filenameSettings, folderTemplate: next})} placeholder="%USER_SCREEN_NAME%" ariaLabel="下载文件夹命名模板" />
             </Field>
             <p className="template-help">文件夹示例：{previewFoldername}</p>
             <Field label="下载文件名模板">
-              <input value={filenameSettings.fileTemplate} onFocus={() => setTemplateTarget("file")} onChange={e => saveFilenameSettings({...filenameSettings, fileTemplate: e.target.value})} placeholder="%USER_SCREEN_NAME% [%POST_TIME%] %POST_ID%_%MEDIA_INDEX%%EXT%" />
+              <TemplateEditor ref={fileTemplateRef} value={filenameSettings.fileTemplate} onFocus={() => setTemplateTarget("file")} onChange={next => saveFilenameSettings({...filenameSettings, fileTemplate: next})} placeholder="%USER_SCREEN_NAME% [%POST_TIME%] %POST_ID%_%MEDIA_INDEX%%EXT%" ariaLabel="下载文件名模板" />
             </Field>
             <p className="template-help">文件名示例：{previewFilename}</p>
           </div>
           <div className="variable-picker">
             <div className="variable-picker-heading"><strong>可用变量</strong><span>当前插入目标：{templateTarget === "file" ? "文件名模板" : "文件夹模板"}</span></div>
             <div className="variable-grid">{filenameVariables.map((variable: TemplateVariable) => <button type="button" className="variable-chip icon-tooltip" key={variable.token} data-tooltip={variable.description} onMouseDown={e => e.preventDefault()} onClick={() => {
-              // 点击变量时追加对应占位符，避免将用户模板格式写死。
-              const key = templateTarget === "file" ? "fileTemplate" : "folderTemplate";
-              saveFilenameSettings({...filenameSettings, [key]: filenameSettings[key] + variable.token});
+              // 插入到最近聚焦的模板编辑器光标处；没聚焦过则追加到末尾。
+              const editor = templateTarget === "file" ? fileTemplateRef.current : folderTemplateRef.current;
+              editor?.insertToken(variable.token);
             }}><code>{variable.token}</code><span>{variable.label}</span></button>)}</div>
           </div>
         </section>
